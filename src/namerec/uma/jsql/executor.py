@@ -55,11 +55,8 @@ class JSQLExecutor:
 
                 return query_result
 
-        except JSQLExecutionError:
-            # Re-raise our own exceptions
-            raise
-        except JSQLSyntaxError:
-            # Re-raise syntax errors without wrapping
+        except (JSQLExecutionError, JSQLSyntaxError):
+            # Re-raise our own exceptions as-is
             raise
         except Exception as e:
             # Wrap other exceptions

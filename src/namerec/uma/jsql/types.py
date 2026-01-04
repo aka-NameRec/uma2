@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-@dataclass
+@dataclass(slots=True)
 class ColumnMetadata:
     """Metadata for a result column."""
 
@@ -38,7 +38,7 @@ class ColumnMetadata:
         }
 
 
-@dataclass
+@dataclass(slots=True)
 class QueryResult:
     """Result of JSQL query execution."""
 
