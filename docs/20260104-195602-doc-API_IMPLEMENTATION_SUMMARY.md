@@ -137,21 +137,44 @@ entities = await uma_list_entities(
 
 **Возвращает**: `list[str]` - имена сущностей
 
-### 7. `uma_select()`
+### 7. `uma_select()` ✅
 
 ```python
 from namerec.uma import uma_select
 
-# Placeholder - будет реализовано позже
+# JSQL query execution
 result = await uma_select(
-    jsql={'from': 'users', 'select': ['*']},
+    jsql={
+        'from': 'users',
+        'select': ['id', 'name'],
+        'where': {
+            'op': '=',
+            'left': {'field': 'active'},
+            'right': {'value': True}
+        }
+    },
     params={},
+    user_context=current_user,
 )
 ```
 
-**Статус**: Placeholder - выбрасывает `NotImplementedError`
+**Статус**: ✅ Fully implemented
 
-**Будущее**: Полный JSQL парсер
+**Реализация**: 
+- Парсер JSQL → SQLAlchemy (`jsql/parser.py`)
+- Executor для выполнения (`jsql/executor.py`)
+- Построитель результатов с метаданными (`jsql/result.py`)
+
+**Документация**: См. [JSQL Specification](20260104-220450-doc-JSQL_SPECIFICATION.md)
+
+**Поддерживаемые возможности**:
+- Все типы SELECT запросов
+- WHERE с операторами, AND/OR/NOT
+- JOINs всех типов
+- Агрегации и GROUP BY
+- ORDER BY (включая по алиасам)
+- CTEs, подзапросы, оконные функции
+- Параметризованные запросы
 
 ### 8. `get_registry()`
 

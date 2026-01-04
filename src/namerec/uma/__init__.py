@@ -20,6 +20,8 @@ from namerec.uma.core.exceptions import (
     UMANotImplementedError,
     UMAValidationError,
 )
+from namerec.uma.jsql.exceptions import JSQLExecutionError
+from namerec.uma.jsql.exceptions import JSQLSyntaxError
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
 from namerec.uma.core.types import MetadataProvider
@@ -50,6 +52,8 @@ __all__ = [
     'UMANotFoundError',
     'UMANotImplementedError',
     'UMAValidationError',
+    'JSQLSyntaxError',
+    'JSQLExecutionError',
     # Utils
     'parse_entity_name',
     'form_entity_name',

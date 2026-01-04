@@ -326,8 +326,6 @@ async def uma_select(
     """
     Execute JSQL query.
 
-    Note: This is a placeholder implementation. Full JSQL parser will be implemented later.
-
     Args:
         jsql: JSQL query dictionary (must contain 'from' field)
         params: Query parameters
@@ -335,14 +333,17 @@ async def uma_select(
         namespace: Optional namespace
 
     Returns:
-        Dictionary with 'metadata' and 'data' keys
+        Dictionary with 'meta' and 'data' keys
 
     Raises:
         UMAAccessDeniedError: If access denied
         ValueError: If JSQL invalid
         RuntimeError: If UMA not initialized
-        NotImplementedError: JSQL parser not yet implemented
+        JSQLSyntaxError: If JSQL syntax is invalid
+        JSQLExecutionError: If query execution fails
     """
+    from namerec.uma.jsql.executor import JSQLExecutor
+
     context = _create_context(user_context)
 
     # Extract entity_name from JSQL
@@ -354,11 +355,8 @@ async def uma_select(
     # Check access
     _check_access(entity_name, Operation.SELECT, context)
 
-    # TODO: Implement full JSQL parser
-    # For now, raise NotImplementedError
-    msg = (
-        'JSQL parser not yet implemented. '
-        'This is a placeholder for future implementation. '
-        'Use uma_read, uma_save, uma_delete, uma_meta for now.'
-    )
-    raise NotImplementedError(msg)
+    # Execute JSQL query
+    executor = JSQLExecutor(context)
+    result = await executor.execute(jsql, params)
+
+    return result.to_dict()
