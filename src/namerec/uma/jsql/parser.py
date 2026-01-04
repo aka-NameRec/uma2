@@ -365,13 +365,14 @@ class JSQLParser:
             if 'table' not in join_spec:
                 raise JSQLSyntaxError('JOIN must have "table" field', path)
 
-            if 'on' not in join_spec:
-                raise JSQLSyntaxError('JOIN must have "on" field', path)
-
             # Get join type (default INNER)
             join_type = join_spec.get('type', 'INNER').upper()
             if join_type not in ('INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS'):
                 raise JSQLSyntaxError(f'Invalid join type: {join_type}', path)
+
+            # CROSS JOIN doesn't require ON clause
+            if join_type != 'CROSS' and 'on' not in join_spec:
+                raise JSQLSyntaxError('JOIN must have "on" field', path)
 
             # Get table
             table_name = join_spec['table']
@@ -392,12 +393,26 @@ class JSQLParser:
             # Register alias
             self.table_aliases[alias_name] = table
 
-            # Build ON condition
-            on_condition = await self._build_condition(join_spec['on'])
-
-            # Apply join
-            is_outer = join_type in ('LEFT', 'RIGHT', 'FULL')
-            current_from = current_from.join(table, on_condition, isouter=is_outer)
+            # Apply join based on type
+            if join_type == 'CROSS':
+                # CROSS JOIN - no ON clause
+                current_from = current_from.join(table, isouter=False, full=False)
+            elif join_type == 'LEFT':
+                # LEFT OUTER JOIN
+                on_condition = await self._build_condition(join_spec['on'])
+                current_from = current_from.join(table, on_condition, isouter=True)
+            elif join_type == 'RIGHT':
+                # RIGHT OUTER JOIN - reverse the order
+                on_condition = await self._build_condition(join_spec['on'])
+                current_from = table.join(current_from, on_condition, isouter=True)
+            elif join_type == 'FULL':
+                # FULL OUTER JOIN
+                on_condition = await self._build_condition(join_spec['on'])
+                current_from = current_from.join(table, on_condition, isouter=True, full=True)
+            else:
+                # INNER JOIN (default)
+                on_condition = await self._build_condition(join_spec['on'])
+                current_from = current_from.join(table, on_condition, isouter=False)
 
         return current_from
 
@@ -440,6 +455,11 @@ class JSQLParser:
 
         # Comparison operators
         if op in ('=', '!=', '<', '<=', '>', '>='):
+            if 'left' not in condition_spec:
+                raise JSQLSyntaxError(f'{op} operator must have "left" field')
+            if 'right' not in condition_spec:
+                raise JSQLSyntaxError(f'{op} operator must have "right" field')
+            
             left = await self._build_expression(condition_spec['left'])
             right = await self._build_expression(condition_spec['right'])
 
@@ -454,6 +474,11 @@ class JSQLParser:
 
         # IN operator
         if op == 'IN':
+            if 'left' not in condition_spec:
+                raise JSQLSyntaxError('IN operator must have "left" field')
+            if 'right' not in condition_spec:
+                raise JSQLSyntaxError('IN operator must have "right" field')
+            
             left = await self._build_expression(condition_spec['left'])
             right_spec = condition_spec['right']
 
@@ -479,15 +504,24 @@ class JSQLParser:
 
         # IS NULL / IS NOT NULL
         if op == 'IS NULL':
+            if 'expr' not in condition_spec:
+                raise JSQLSyntaxError('IS NULL must have "expr" field')
             expr = await self._build_expression(condition_spec['expr'])
             return expr.is_(None)
 
         if op == 'IS NOT NULL':
+            if 'expr' not in condition_spec:
+                raise JSQLSyntaxError('IS NOT NULL must have "expr" field')
             expr = await self._build_expression(condition_spec['expr'])
             return expr.isnot(None)
 
         # LIKE operator
         if op == 'LIKE':
+            if 'left' not in condition_spec:
+                raise JSQLSyntaxError('LIKE operator must have "left" field')
+            if 'right' not in condition_spec:
+                raise JSQLSyntaxError('LIKE operator must have "right" field')
+            
             left = await self._build_expression(condition_spec['left'])
             right = await self._build_expression(condition_spec['right'])
             return left.like(right)

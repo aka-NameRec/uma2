@@ -4,6 +4,7 @@ from typing import Any
 
 from namerec.uma.core.context import UMAContext
 from namerec.uma.jsql.exceptions import JSQLExecutionError
+from namerec.uma.jsql.exceptions import JSQLSyntaxError
 from namerec.uma.jsql.parser import JSQLParser
 from namerec.uma.jsql.result import JSQLResultBuilder
 from namerec.uma.jsql.types import JSQLQuery
@@ -56,6 +57,9 @@ class JSQLExecutor:
 
         except JSQLExecutionError:
             # Re-raise our own exceptions
+            raise
+        except JSQLSyntaxError:
+            # Re-raise syntax errors without wrapping
             raise
         except Exception as e:
             # Wrap other exceptions
