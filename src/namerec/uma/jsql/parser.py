@@ -168,12 +168,12 @@ class JSQLParser:
             order_by_clauses = await self._build_order_by(order_by_spec)
             query = query.order_by(*order_by_clauses)
 
-        # Add LIMIT
-        if limit_value := jsql.get(JSQLField.LIMIT.value):
+        # Add LIMIT (check 'is not None' to allow 0)
+        if (limit_value := jsql.get(JSQLField.LIMIT.value)) is not None:
             query = query.limit(limit_value)
 
-        # Add OFFSET
-        if offset_value := jsql.get(JSQLField.OFFSET.value):
+        # Add OFFSET (check 'is not None' to allow 0)
+        if (offset_value := jsql.get(JSQLField.OFFSET.value)) is not None:
             query = query.offset(offset_value)
 
         return query
@@ -638,6 +638,12 @@ class JSQLParser:
 
             # Binary arithmetic operators - use pattern matching
             if op in ARITHMETIC_OPERATORS:
+                # Validate required fields
+                if JSQLField.LEFT.value not in expr_spec:
+                    raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.LEFT.value}" field')
+                if JSQLField.RIGHT.value not in expr_spec:
+                    raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
+                
                 left = await self._build_expression(expr_spec[JSQLField.LEFT.value])
                 right = await self._build_expression(expr_spec[JSQLField.RIGHT.value])
 

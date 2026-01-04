@@ -519,3 +519,78 @@ async def test_order_by_alias(test_db):
     assert totals == sorted(totals, reverse=True)
     # Customer 1 should be first (has 2 orders: 100 + 250 = 350)
     assert result['data'][0][0] == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_zero(test_db):
+    """Test LIMIT 0 is applied correctly (Bug fix: 0 is falsy but valid)."""
+    jsql = {
+        'from': 'customers',
+        'select': ['id', 'name'],
+        'limit': 0,
+    }
+
+    result = await uma_select(jsql)
+
+    # LIMIT 0 should return no rows
+    assert len(result['data']) == 0
+    # But metadata should still be present
+    assert len(result['meta']) == 2
+
+
+@pytest.mark.asyncio
+async def test_offset_zero(test_db):
+    """Test OFFSET 0 is applied correctly (Bug fix: 0 is falsy but valid)."""
+    jsql = {
+        'from': 'customers',
+        'select': ['id'],
+        'order_by': [{'field': 'id', 'direction': 'asc'}],
+        'offset': 0,
+        'limit': 2,
+    }
+
+    result = await uma_select(jsql)
+
+    # OFFSET 0 should be same as no offset - starts from first row
+    assert len(result['data']) == 2
+    assert result['data'][0][0] == 1  # First customer ID
+
+
+@pytest.mark.asyncio
+async def test_arithmetic_operators_validation(test_db):
+    """Test arithmetic operators validate required fields (Bug fix: prevent KeyError)."""
+    # Missing 'left' field
+    jsql_missing_left = {
+        'from': 'orders',
+        'select': [
+            {
+                'expr': {
+                    'op': '+',
+                    'right': {'field': 'quantity'},
+                },
+                'alias': 'result',
+            },
+        ],
+    }
+
+    with pytest.raises(JSQLSyntaxError) as exc_info:
+        await uma_select(jsql_missing_left)
+    assert '+ operator must have "left" field' in str(exc_info.value)
+
+    # Missing 'right' field
+    jsql_missing_right = {
+        'from': 'orders',
+        'select': [
+            {
+                'expr': {
+                    'op': '*',
+                    'left': {'field': 'quantity'},
+                },
+                'alias': 'result',
+            },
+        ],
+    }
+
+    with pytest.raises(JSQLSyntaxError) as exc_info:
+        await uma_select(jsql_missing_right)
+    assert '* operator must have "right" field' in str(exc_info.value)
