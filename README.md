@@ -111,6 +111,7 @@ UMA is designed for:
 ## Documentation
 
 - [Quick Start Guide](docs/20260104-195802-doc-QUICKSTART.md) - Get started with UMA in minutes
+- [JSQL Specification](docs/20260104-220450-doc-JSQL_SPECIFICATION.md) - Complete JSQL (JSON-SQL) query syntax and examples
 - [API Summary](docs/20260104-195632-doc-API_SUMMARY.md) - Complete API reference and examples
 - [API Implementation Summary](docs/20260104-195602-doc-API_IMPLEMENTATION_SUMMARY.md) - Implementation details and internals
 - [Project Structure](docs/20260104-195714-doc-PROJECT_STRUCTURE.md) - Architecture and design documentation

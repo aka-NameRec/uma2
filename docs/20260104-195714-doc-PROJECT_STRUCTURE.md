@@ -22,19 +22,37 @@ uma2/
 │           │   ├── __init__.py
 │           │   ├── base.py       # DefaultEntityHandler
 │           │   └── virtual.py    # VirtualViewHandler
+│           ├── jsql/             # JSQL (JSON-SQL) implementation
+│           │   ├── __init__.py
+│           │   ├── types.py      # JSQL type definitions
+│           │   ├── exceptions.py # JSQL-specific exceptions
+│           │   ├── parser.py     # JSQL to SQLAlchemy parser
+│           │   ├── executor.py   # JSQL query executor
+│           │   └── result.py     # Result builder with metadata
+│           ├── api.py            # High-level API functions
 │           ├── registry.py       # EntityRegistry
 │           └── metadata.py       # DefaultMetadataProvider
 ├── tests/                        # Tests
 │   ├── __init__.py
 │   ├── conftest.py              # Pytest fixtures
-│   └── test_basic.py            # Basic tests
+│   ├── test_basic.py            # Basic tests
+│   ├── test_api.py              # API tests
+│   └── test_jsql.py             # JSQL parser and executor tests
 ├── examples/                     # Usage examples
-│   └── basic_usage.py           # Basic usage example
-├── docs/                         # Documentation (design docs)
+│   ├── basic_usage.py           # Basic CRUD operations
+│   ├── api_usage.py             # API usage with access control
+│   └── jsql_usage.py            # JSQL query examples
+├── docs/                         # Documentation
 │   ├── 20251201-010207-intro.md
 │   ├── 20251202-050343-log-concept.md
 │   ├── 20260103-130403-log-impl_proposal.md
-│   └── 20260104-142932-log-impl_proposal-entity_handlers.md
+│   ├── 20260104-142932-log-impl_proposal-entity_handlers.md
+│   ├── 20260104-195602-doc-API_IMPLEMENTATION_SUMMARY.md
+│   ├── 20260104-195632-doc-API_SUMMARY.md
+│   ├── 20260104-195714-doc-PROJECT_STRUCTURE.md
+│   ├── 20260104-195802-doc-QUICKSTART.md
+│   ├── 20260104-203856-log-project_setup.md
+│   └── 20260104-220450-doc-JSQL_SPECIFICATION.md
 ├── context_portal/              # ConPort data (gitignored)
 ├── logs/                        # Logs (gitignored)
 ├── README.md                    # Project overview
@@ -187,10 +205,10 @@ registry.register('my_view', MyView)
 
 ## Future Enhancements
 
-- JSQL parser (JSON to SQLAlchemy)
+- JSQL parser (JSON to SQLAlchemy) - ✅ Implemented (see [JSQL Specification](20260104-220450-doc-JSQL_SPECIFICATION.md))
 - Access control hooks
 - Query executor
-- API layer (uma_select, uma_read, uma_save, etc.)
+- API layer (uma_select, uma_read, uma_save, etc.) - ✅ Implemented
 - Support for many-to-many relationships
 - Caching layer
 - Performance optimizations
