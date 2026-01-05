@@ -613,8 +613,7 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             select_fields = []
             for expr in parsed.expressions:
                 field_dict = _convert_expression_to_jsql(expr)
-                if field_dict:
-                    select_fields.append(field_dict)
+                select_fields.append(field_dict)
             if select_fields:
                 jsql['select'] = select_fields
 
@@ -622,16 +621,14 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         if parsed.args.get('where'):
             where_expr = parsed.args['where'].this
             where_jsql = _convert_condition_to_jsql(where_expr)
-            if where_jsql:
-                jsql['where'] = where_jsql
+            jsql['where'] = where_jsql
 
         # JOIN clauses
         if parsed.args.get('joins'):
             joins = []
             for join in parsed.args['joins']:
                 join_dict = _convert_join_to_jsql(join)
-                if join_dict:
-                    joins.append(join_dict)
+                joins.append(join_dict)
             if joins:
                 jsql['joins'] = joins
 
@@ -640,8 +637,7 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             order_by = []
             for order_expr in parsed.args['order'].expressions:
                 order_dict = _convert_order_to_jsql(order_expr)
-                if order_dict:
-                    order_by.append(order_dict)
+                order_by.append(order_dict)
             if order_by:
                 jsql['order_by'] = order_by
 
@@ -662,8 +658,7 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             group_by = []
             for group_expr in parsed.args['group'].expressions:
                 field_dict = _convert_expression_to_jsql(group_expr)
-                if field_dict:
-                    group_by.append(field_dict)
+                group_by.append(field_dict)
             if group_by:
                 jsql['group_by'] = group_by
 
@@ -671,8 +666,7 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         if parsed.args.get('having'):
             having_expr = parsed.args['having'].this
             having_jsql = _convert_condition_to_jsql(having_expr)
-            if having_jsql:
-                jsql['having'] = having_jsql
+            jsql['having'] = having_jsql
 
         logger.info("Successfully converted SQL to JSQL")
         logger.debug(f"Generated JSQL: {jsql}")
@@ -689,15 +683,20 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         ) from e
 
 
-def _convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression | None:
-    """Convert sqlglot expression to JSQL expression."""
+def _convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
+    """
+    Convert sqlglot expression to JSQL expression.
+    
+    Raises:
+        InvalidExpressionError: If expression structure is invalid
+        UnknownOperatorError: If arithmetic operator is not supported
+        UnsupportedOperationError: If expression type is not supported
+    """
     # Handle aliased expressions
     if isinstance(expr, exp.Alias):
         base_expr = _convert_expression_to_jsql(expr.this)
-        if base_expr:
-            base_expr['alias'] = expr.alias
-            return base_expr
-        return None
+        base_expr['alias'] = expr.alias
+        return base_expr
 
     # Handle column references
     if isinstance(expr, exp.Column):
@@ -718,6 +717,8 @@ def _convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression | None:
     if isinstance(expr, exp.Func):
         func_name = expr.sql_name()
         # Single pass: type check, convert, and filter in one comprehension
+        # After error handling fix, None won't be returned, but we still filter
+        # for cases where conversion might fail (shouldn't happen, but defensive)
         args = [
             converted
             for arg in expr.args.values()
@@ -732,19 +733,36 @@ def _convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression | None:
     # Handle binary operations (use reverse mapping)
     if isinstance(expr, (exp.Add, exp.Sub, exp.Mul, exp.Div)):
         op = SQLGLOT_TO_ARITHMETIC.get(type(expr))
-        if op:
-            return {
-                'op': op,
-                'left': _convert_expression_to_jsql(expr.left),
-                'right': _convert_expression_to_jsql(expr.right),
-            }
+        if not op:
+            raise UnknownOperatorError(
+                operator=type(expr).__name__,
+                path='',
+                supported=list(SQLGLOT_TO_ARITHMETIC.values())
+            )
+        
+        return {
+            'op': op,
+            'left': _convert_expression_to_jsql(expr.left),
+            'right': _convert_expression_to_jsql(expr.right),
+        }
 
-    # Default: return None for unsupported expressions
-    return None
+    # Default: unsupported expression type
+    raise UnsupportedOperationError(
+        operation=f"Expression type: {type(expr).__name__}",
+        reason="This expression type is not supported in JSQL conversion",
+        path=''
+    )
 
 
-def _convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any] | None:
-    """Convert sqlglot condition to JSQL condition."""
+def _convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
+    """
+    Convert sqlglot condition to JSQL condition.
+    
+    Raises:
+        InvalidExpressionError: If condition structure is invalid
+        UnknownOperatorError: If comparison operator is not supported
+        UnsupportedOperationError: If condition type is not supported
+    """
     # Handle AND/OR
     if isinstance(expr, exp.And):
         return {
@@ -775,68 +793,137 @@ def _convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any] | None:
     if isinstance(expr, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)):
         op = SQLGLOT_TO_COMPARISON.get(type(expr))
         if not op:
-            return None
+            raise UnknownOperatorError(
+                operator=type(expr).__name__,
+                path='',
+                supported=list(SQLGLOT_TO_COMPARISON.values())
+            )
         
         left = _convert_expression_to_jsql(expr.left)
         right = _convert_expression_to_jsql(expr.right)
 
-        if left and 'field' in left and right:
-            result: dict[str, Any] = {
-                'field': left['field'],
-                'op': op,
-            }
-            if 'value' in right:
-                result['value'] = right['value']
-            elif 'field' in right:
-                result['right_field'] = right['field']
-            return result
+        if 'field' not in left:
+            raise InvalidExpressionError(
+                message="Comparison operator left side must be a field reference",
+                path='left',
+                expression=left
+            )
+        
+        result: dict[str, Any] = {
+            'field': left['field'],
+            'op': op,
+        }
+        
+        if 'value' in right:
+            result['value'] = right['value']
+        elif 'field' in right:
+            result['right_field'] = right['field']
+        else:
+            raise InvalidExpressionError(
+                message="Comparison operator right side must be a value or field reference",
+                path='right',
+                expression=right
+            )
+        
+        return result
 
     # Handle IN
     if isinstance(expr, exp.In):
         left = _convert_expression_to_jsql(expr.this)
-        if left and 'field' in left:
-            values = []
-            if isinstance(expr.expressions, list):
-                for val_expr in expr.expressions:
-                    val = _convert_expression_to_jsql(val_expr)
-                    if val and 'value' in val:
-                        values.append(val['value'])
+        if 'field' not in left:
+            raise InvalidExpressionError(
+                message="IN operator left side must be a field reference",
+                path='left',
+                expression=left
+            )
+        
+        values = []
+        if isinstance(expr.expressions, list):
+            for val_expr in expr.expressions:
+                val = _convert_expression_to_jsql(val_expr)
+                if 'value' not in val:
+                    raise InvalidExpressionError(
+                        message="IN operator values must be literals",
+                        path='values',
+                        expression=val
+                    )
+                values.append(val['value'])
 
-            return {
-                'field': left['field'],
-                'op': JSQLOperator.IN.value,
-                'values': values,
-            }
+        return {
+            'field': left['field'],
+            'op': JSQLOperator.IN.value,
+            'values': values,
+        }
 
     # Handle LIKE
     if isinstance(expr, exp.Like):
         left = _convert_expression_to_jsql(expr.this)
         right = _convert_expression_to_jsql(expr.expression)
-        if left and 'field' in left and right and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': JSQLOperator.LIKE.value,
-                'pattern': right['value'],
-            }
+        
+        if 'field' not in left:
+            raise InvalidExpressionError(
+                message="LIKE operator left side must be a field reference",
+                path='left',
+                expression=left
+            )
+        
+        if 'value' not in right:
+            raise InvalidExpressionError(
+                message="LIKE operator right side must be a string literal",
+                path='right',
+                expression=right
+            )
+        
+        return {
+            'field': left['field'],
+            'op': JSQLOperator.LIKE.value,
+            'pattern': right['value'],
+        }
 
     # Handle IS NULL / IS NOT NULL
     if isinstance(expr, exp.Is):
         left = _convert_expression_to_jsql(expr.this)
-        if left and 'field' in left:
-            if isinstance(expr.expression, exp.Null):
-                return {
-                    'field': left['field'],
-                    'op': JSQLOperator.IS_NULL.value,
-                }
+        if 'field' not in left:
+            raise InvalidExpressionError(
+                message="IS NULL operator left side must be a field reference",
+                path='left',
+                expression=left
+            )
+        
+        if isinstance(expr.expression, exp.Null):
+            return {
+                'field': left['field'],
+                'op': JSQLOperator.IS_NULL.value,
+            }
+        
+        # IS NOT NULL is handled as Not(Is(...)) in sqlglot
+        raise InvalidExpressionError(
+            message="IS expression must be IS NULL",
+            path='expression',
+            expression={'type': type(expr.expression).__name__}
+        )
 
-    # Default: return None
-    return None
+    # Default: unsupported condition type
+    raise UnsupportedOperationError(
+        operation=f"Condition type: {type(expr).__name__}",
+        reason="This condition type is not supported in JSQL conversion",
+        path=''
+    )
 
 
-def _convert_join_to_jsql(join: exp.Join) -> dict[str, Any] | None:
-    """Convert sqlglot JOIN to JSQL join."""
+def _convert_join_to_jsql(join: exp.Join) -> dict[str, Any]:
+    """
+    Convert sqlglot JOIN to JSQL join.
+    
+    Raises:
+        InvalidExpressionError: If JOIN structure is invalid
+    """
     if not isinstance(join, exp.Join):
-        return None
+        raise InvalidExpressionError(
+            message=f"Expected exp.Join, got {type(join).__name__}",
+            path='joins',
+            expression={'type': type(join).__name__}
+        )
 
     # Get join type (use constant mapping)
     join_type = JoinType.INNER.value
@@ -846,7 +933,11 @@ def _convert_join_to_jsql(join: exp.Join) -> dict[str, Any] | None:
     # Get joined table
     table = join.this
     if not isinstance(table, exp.Table):
-        return None
+        raise InvalidExpressionError(
+            message=f"JOIN table must be exp.Table, got {type(table).__name__}",
+            path='joins.this',
+            expression={'type': type(table).__name__}
+        )
 
     result: dict[str, Any] = {
         'type': join_type,
@@ -856,25 +947,46 @@ def _convert_join_to_jsql(join: exp.Join) -> dict[str, Any] | None:
     if table.alias:
         result['alias'] = table.alias
 
-    # Get ON condition
+    # Get ON condition (optional, but if present must be valid)
+    # Note: sqlglot stores ON condition in join.args['on']
+    # The structure: join.args['on'] is typically a wrapper, and the actual condition is in .this
     if join.args.get('on'):
-        on_expr = join.args['on'].this
+        on_arg = join.args['on']
+        
+        # Check if on_arg itself is already a condition (EQ, AND, etc.) or a wrapper
+        # If it's a condition type we can handle, use it directly
+        if isinstance(on_arg, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.And, exp.Or, exp.Not, exp.In, exp.Like, exp.Is)):
+            on_expr = on_arg
+        elif hasattr(on_arg, 'this') and on_arg.this is not None:
+            on_expr = on_arg.this
+        else:
+            on_expr = on_arg
+        
+        logger.debug(f"ON condition type: {type(on_expr).__name__}, value: {on_expr}")
+        
+        # Convert ON condition - will raise exception if invalid
+        # ON condition must be a boolean expression (EQ, AND, OR, etc.), not a simple Column
         on_jsql = _convert_condition_to_jsql(on_expr)
-        if on_jsql:
-            result['on'] = on_jsql
+        result['on'] = on_jsql
 
     return result
 
 
-def _convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any] | None:
-    """Convert sqlglot ORDER BY expression to JSQL order."""
+def _convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:
+    """
+    Convert sqlglot ORDER BY expression to JSQL order.
+    
+    Raises:
+        InvalidExpressionError: If ORDER BY structure is invalid
+    """
     if not isinstance(order_expr, exp.Ordered):
-        return None
+        raise InvalidExpressionError(
+            message=f"Expected exp.Ordered, got {type(order_expr).__name__}",
+            path='order_by',
+            expression={'type': type(order_expr).__name__}
+        )
 
     field_expr = _convert_expression_to_jsql(order_expr.this)
-    if not field_expr:
-        return None
-
     result = field_expr.copy()
     # Use OrderDirection constant and uppercase for consistency
     direction = OrderDirection.DESC if order_expr.args.get('desc') else OrderDirection.ASC
