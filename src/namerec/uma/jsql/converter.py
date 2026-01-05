@@ -1,5 +1,6 @@
 """JSQL to SQL and SQL to JSQL converters."""
 
+import logging
 from typing import Any
 
 import sqlglot
@@ -10,11 +11,17 @@ from namerec.uma.jsql.constants import LOGICAL_OPERATORS
 from namerec.uma.jsql.constants import JSQLOperator
 from namerec.uma.jsql.constants import JoinType
 from namerec.uma.jsql.constants import OrderDirection
+from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
+from namerec.uma.jsql.conversion_exceptions import MissingFieldError
+from namerec.uma.jsql.conversion_exceptions import UnknownOperatorError
+from namerec.uma.jsql.conversion_exceptions import UnsupportedOperationError
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
 from namerec.uma.jsql.types import JSQLExpression
 from namerec.uma.jsql.types import JSQLQuery
 
 __all__ = ['jsql_to_sql', 'sql_to_jsql']
+
+logger = logging.getLogger(__name__)
 
 
 # Operator mappings for JSQL -> SQL conversion
@@ -94,14 +101,15 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
         FROM users
         WHERE users.active = TRUE
     """
+    logger.info(f"Converting JSQL to SQL, dialect={dialect}")
+    logger.debug(f"Input JSQL: {jsql}")
+    
     try:
         # Build SELECT expression
         select_exprs = _jsql_select_to_sqlglot(jsql.get('select', []))
 
-        # Build FROM expression
+        # Build FROM expression (will raise exception if invalid/missing)
         from_expr = _jsql_from_to_sqlglot(jsql.get('from'))
-        if not from_expr:
-            raise JSQLSyntaxError('Missing FROM clause', path='from')
 
         # Start building query
         query = exp.Select(expressions=select_exprs)
@@ -110,19 +118,17 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
         # Add WHERE clause
         if where_spec := jsql.get('where'):
             where_expr = _jsql_condition_to_sqlglot(where_spec)
-            if where_expr:
-                query = query.where(where_expr)
+            query = query.where(where_expr)
 
         # Add JOINs
         if joins := jsql.get('joins'):
             for join_spec in joins:
                 join_expr = _jsql_join_to_sqlglot(join_spec)
-                if join_expr:
-                    query = query.join(
-                        join_expr['table'],
-                        on=join_expr.get('on'),
-                        join_type=join_expr.get('type', JoinType.INNER.value),
-                    )
+                query = query.join(
+                    join_expr['table'],
+                    on=join_expr.get('on'),
+                    join_type=join_expr.get('type', JoinType.INNER.value),
+                )
 
         # Add GROUP BY
         if group_by := jsql.get('group_by'):
@@ -134,8 +140,7 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
         # Add HAVING
         if having_spec := jsql.get('having'):
             having_expr = _jsql_condition_to_sqlglot(having_spec)
-            if having_expr:
-                query.args['having'] = exp.Having(this=having_expr)
+            query.args['having'] = exp.Having(this=having_expr)
 
         # Add ORDER BY
         if order_by := jsql.get('order_by'):
@@ -164,11 +169,15 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
             keyword_case='upper',
         )
 
+        logger.info(f"Successfully converted JSQL to SQL ({dialect})")
+        logger.debug(f"Generated SQL:\n{formatted_sql}")
         return formatted_sql
 
-    except JSQLSyntaxError:
+    except JSQLSyntaxError as e:
+        logger.error(f"Failed to convert JSQL: {e}", exc_info=True)
         raise
     except Exception as e:
+        logger.error(f"Unexpected error during JSQL conversion: {e}", exc_info=True)
         raise JSQLSyntaxError(
             message=f'Failed to convert JSQL to SQL: {e!s}',
             path='',
@@ -192,31 +201,46 @@ def _jsql_select_to_sqlglot(select_spec: list[dict[str, Any]] | None) -> list[ex
     return result if result else [exp.Star()]
 
 
-def _jsql_from_to_sqlglot(from_spec: str | dict[str, Any] | None) -> exp.Table | None:
-    """Convert JSQL FROM to sqlglot table."""
+def _jsql_from_to_sqlglot(from_spec: str | dict[str, Any] | None) -> exp.Table:
+    """
+    Convert JSQL FROM to sqlglot table.
+    
+    Raises:
+        MissingFieldError: If FROM clause is missing or empty
+        InvalidExpressionError: If FROM structure is invalid
+    """
     if not from_spec:
-        return None
+        raise MissingFieldError('from', path='from', context='SELECT query requires FROM clause')
 
     if isinstance(from_spec, str):
         return exp.table_(from_spec)
 
     if isinstance(from_spec, dict):
-        entity = from_spec.get('entity')
+        if 'entity' not in from_spec:
+            raise MissingFieldError('entity', path='from.entity', context='FROM with alias')
+        
+        entity = from_spec['entity']
         alias = from_spec.get('alias')
-        if entity:
-            table = exp.table_(entity)
-            if alias:
-                table = exp.alias_(table, alias, table=True)
-            return table
+        table = exp.table_(entity)
+        if alias:
+            table = exp.alias_(table, alias, table=True)
+        return table
 
-    return None
+    raise InvalidExpressionError(
+        message=f"FROM must be string or dict, got {type(from_spec).__name__}",
+        path='from',
+        expression={'type': type(from_spec).__name__, 'value': repr(from_spec)}
+    )
 
 
-def _jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expression | None:
+def _jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expression:
     """
     Convert JSQL expression to sqlglot expression.
     
     Delegates to specialized functions based on expression type.
+    
+    Raises:
+        InvalidExpressionError: If expression structure is invalid or unrecognized
     """
     if isinstance(expr_spec, str):
         return _convert_field_reference(expr_spec)
@@ -231,8 +255,20 @@ def _jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expressi
             return _convert_function_call(expr_spec)
         if 'op' in expr_spec:
             return _convert_arithmetic_op(expr_spec)
+        
+        # If we get here, the dict doesn't match any known pattern
+        raise InvalidExpressionError(
+            message="Expression must contain one of: 'field', 'value', 'func', or 'op'",
+            path='',
+            expression=expr_spec
+        )
 
-    return None
+    # If it's neither string nor dict
+    raise InvalidExpressionError(
+        message=f"Expression must be string or dict, got {type(expr_spec).__name__}",
+        path='',
+        expression={'type': type(expr_spec).__name__, 'value': repr(expr_spec)}
+    )
 
 
 def _convert_field_reference(field: str) -> exp.Expression:
@@ -259,51 +295,80 @@ def _convert_literal_value(value: Any) -> exp.Expression:  # noqa: ANN401
 def _convert_function_call(expr_spec: dict[str, Any]) -> exp.Expression:
     """Convert function call to sqlglot expression."""
     func = expr_spec['func']
+    logger.debug(f"Converting function call: {func}")
+    
     # Single pass: convert and filter None values in one comprehension
     args = [
         converted
         for arg in expr_spec.get('args', [])
         if (converted := _jsql_expression_to_sqlglot(arg)) is not None
     ]
+    logger.debug(f"Function {func} has {len(args)} arguments")
     
     # Try to find specific sqlglot function class
     func_class = getattr(exp, func.upper(), None)
     if func_class and issubclass(func_class, exp.Func):
+        logger.debug(f"Using specific sqlglot function: {func_class.__name__}")
         return func_class(*args)
     
     # Fallback to generic Anonymous function
+    logger.debug(f"Using Anonymous function for: {func}")
     return exp.Anonymous(this=func, expressions=args)
 
 
-def _convert_arithmetic_op(expr_spec: dict[str, Any]) -> exp.Expression | None:
-    """Convert arithmetic operation to sqlglot expression."""
-    op = expr_spec['op']
-    left = _jsql_expression_to_sqlglot(expr_spec.get('left'))
-    right = _jsql_expression_to_sqlglot(expr_spec.get('right'))
+def _convert_arithmetic_op(expr_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Convert arithmetic operation to sqlglot expression.
     
-    if not left or not right:
-        return None
+    Raises:
+        MissingFieldError: If left or right operand is missing
+        UnknownOperatorError: If operator is not supported
+    """
+    op = expr_spec.get('op')
+    if not op:
+        raise MissingFieldError('op', path='op', context='arithmetic operation')
+    
+    if 'left' not in expr_spec:
+        raise MissingFieldError('left', path='left', context='arithmetic operation')
+    if 'right' not in expr_spec:
+        raise MissingFieldError('right', path='right', context='arithmetic operation')
+    
+    left = _jsql_expression_to_sqlglot(expr_spec['left'])
+    right = _jsql_expression_to_sqlglot(expr_spec['right'])
     
     # Use mapping instead of match statement
     operator_class = ARITHMETIC_OP_TO_SQLGLOT.get(op)
-    if operator_class:
-        return operator_class(this=left, expression=right)
+    if not operator_class:
+        raise UnknownOperatorError(
+            operator=op,
+            path='op',
+            supported=list(ARITHMETIC_OP_TO_SQLGLOT.keys())
+        )
     
-    return None
+    return operator_class(this=left, expression=right)
 
 
-def _jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression | None:
+def _jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression:
     """
     Convert JSQL condition to sqlglot expression.
     
     Delegates to specialized functions based on operator type.
+    
+    Raises:
+        InvalidExpressionError: If condition structure is invalid
+        MissingFieldError: If required operator field is missing
     """
     if not isinstance(cond_spec, dict):
-        return None
+        raise InvalidExpressionError(
+            message=f"Condition must be a dict, got {type(cond_spec).__name__}",
+            path='',
+            expression={'type': type(cond_spec).__name__, 'value': repr(cond_spec)}
+        )
 
-    op = cond_spec.get('op')
-    if not op:
-        return None
+    if 'op' not in cond_spec:
+        raise MissingFieldError('op', path='op', context='condition')
+    
+    op = cond_spec['op']
 
     # Try logical operators first (use constant set)
     if op in LOGICAL_OPERATORS:
@@ -313,60 +378,113 @@ def _jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression | No
     return _convert_comparison_operator(op, cond_spec)
 
 
-def _convert_logical_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression | None:
-    """Convert logical operator (AND/OR/NOT) to sqlglot expression."""
+def _convert_logical_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Convert logical operator (AND/OR/NOT) to sqlglot expression.
+    
+    Raises:
+        MissingFieldError: If required field is missing
+        UnknownOperatorError: If operator is not supported
+        InvalidExpressionError: If conditions list is empty
+    """
+    logger.debug(f"Converting logical operator: {op}")
+    
     # Handle AND/OR operators
     if op in (JSQLOperator.AND.value, JSQLOperator.OR.value):
-        conditions = cond_spec.get('conditions', [])
+        if 'conditions' not in cond_spec:
+            raise MissingFieldError('conditions', path='conditions', context=f'{op} operator')
+        
+        conditions = cond_spec['conditions']
+        logger.debug(f"Processing {len(conditions)} conditions for {op}")
+        
         if not conditions:
-            return None
+            raise InvalidExpressionError(
+                message=f"{op} operator requires at least one condition",
+                path='conditions'
+            )
         
         result = _jsql_condition_to_sqlglot(conditions[0])
         operator_class = LOGICAL_OP_TO_SQLGLOT.get(op)
         if not operator_class:
-            return None
+            raise UnknownOperatorError(
+                operator=op,
+                path='op',
+                supported=list(LOGICAL_OP_TO_SQLGLOT.keys())
+            )
         
         for cond in conditions[1:]:
             next_cond = _jsql_condition_to_sqlglot(cond)
-            if result and next_cond:
-                result = operator_class(this=result, expression=next_cond)
+            result = operator_class(this=result, expression=next_cond)
+        
+        logger.debug(f"Built {op} expression with {len(conditions)} conditions")
         return result
     
     # Handle NOT operator
     if op == JSQLOperator.NOT.value:
-        condition = _jsql_condition_to_sqlglot(cond_spec.get('condition', {}))
-        return exp.Not(this=condition) if condition else None
+        logger.debug("Processing NOT condition")
+        if 'condition' not in cond_spec:
+            raise MissingFieldError('condition', path='condition', context='NOT operator')
+        
+        condition = _jsql_condition_to_sqlglot(cond_spec['condition'])
+        return exp.Not(this=condition)
     
-    return None
+    # Unknown logical operator
+    logger.warning(f"Unknown logical operator: {op}")
+    raise UnknownOperatorError(
+        operator=op,
+        path='op',
+        supported=[JSQLOperator.AND.value, JSQLOperator.OR.value, JSQLOperator.NOT.value]
+    )
 
 
-def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression | None:
-    """Convert comparison operator to sqlglot expression."""
+def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Convert comparison operator to sqlglot expression.
+    
+    Raises:
+        MissingFieldError: If required field is missing
+        UnknownOperatorError: If operator is not supported
+    """
+    logger.debug(f"Converting comparison operator: {op}")
+    
     # Get left side (field)
-    field_expr = _jsql_expression_to_sqlglot(cond_spec.get('field', ''))
-    if not field_expr:
-        return None
-
-    # Get right side (value or field)
-    right_expr = None
-    if 'value' in cond_spec:
-        right_expr = _jsql_expression_to_sqlglot({'value': cond_spec['value']})
-    elif 'right_field' in cond_spec:
-        right_expr = _jsql_expression_to_sqlglot(cond_spec['right_field'])
+    if 'field' not in cond_spec:
+        raise MissingFieldError('field', path='field', context='comparison operation')
+    
+    field_expr = _jsql_expression_to_sqlglot(cond_spec['field'])
 
     # Handle standard comparison operators using mapping
     operator_class = COMPARISON_OP_TO_SQLGLOT.get(op)
-    if operator_class and right_expr:
+    if operator_class:
+        # Get right side (value or field)
+        right_expr = None
+        if 'value' in cond_spec:
+            right_expr = _jsql_expression_to_sqlglot({'value': cond_spec['value']})
+        elif 'right_field' in cond_spec:
+            right_expr = _jsql_expression_to_sqlglot(cond_spec['right_field'])
+        else:
+            raise MissingFieldError(
+                'value or right_field',
+                path='',
+                context='comparison requires right operand'
+            )
+        
         return operator_class(this=field_expr, expression=right_expr)
     
     # Handle special operators
     if op == JSQLOperator.IN.value:
-        values = cond_spec.get('values', [])
+        if 'values' not in cond_spec:
+            raise MissingFieldError('values', path='values', context='IN operator')
+        values = cond_spec['values']
+        logger.debug(f"Processing IN operator with {len(values)} values")
         val_exprs = [_jsql_expression_to_sqlglot({'value': v}) for v in values]
         return exp.In(this=field_expr, expressions=val_exprs)
     
     if op == JSQLOperator.LIKE.value:
-        pattern = cond_spec.get('pattern', '')
+        if 'pattern' not in cond_spec:
+            raise MissingFieldError('pattern', path='pattern', context='LIKE operator')
+        pattern = cond_spec['pattern']
+        logger.debug(f"Processing LIKE operator with pattern: {pattern}")
         return exp.Like(this=field_expr, expression=exp.Literal.string(pattern))
     
     if op == JSQLOperator.IS_NULL.value:
@@ -375,17 +493,40 @@ def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expr
     if op == JSQLOperator.IS_NOT_NULL.value:
         return exp.Not(this=exp.Is(this=field_expr, expression=exp.Null()))
     
-    return None
+    # Unknown operator
+    supported = list(COMPARISON_OP_TO_SQLGLOT.keys()) + [
+        JSQLOperator.IN.value,
+        JSQLOperator.LIKE.value,
+        JSQLOperator.IS_NULL.value,
+        JSQLOperator.IS_NOT_NULL.value,
+    ]
+    logger.warning(f"Unknown comparison operator: {op}")
+    raise UnknownOperatorError(operator=op, path='op', supported=supported)
 
 
-def _jsql_join_to_sqlglot(join_spec: dict[str, Any]) -> dict[str, Any] | None:
-    """Convert JSQL JOIN to sqlglot join components."""
+def _jsql_join_to_sqlglot(join_spec: dict[str, Any]) -> dict[str, Any]:
+    """
+    Convert JSQL JOIN to sqlglot join components.
+    
+    Raises:
+        InvalidExpressionError: If JOIN structure is invalid
+        MissingFieldError: If required entity field is missing
+    """
     if not isinstance(join_spec, dict):
-        return None
+        logger.debug("Invalid join_spec type, expected dict")
+        raise InvalidExpressionError(
+            message=f"JOIN spec must be dict, got {type(join_spec).__name__}",
+            path='joins',
+            expression={'type': type(join_spec).__name__, 'value': repr(join_spec)}
+        )
 
-    entity = join_spec.get('entity')
-    if not entity:
-        return None
+    if 'entity' not in join_spec:
+        logger.debug("Missing 'entity' in join_spec")
+        raise MissingFieldError('entity', path='joins.entity', context='JOIN')
+    
+    entity = join_spec['entity']
+    join_type = join_spec.get('type', JoinType.INNER.value).upper()
+    logger.debug(f"Processing {join_type} JOIN to {entity}")
 
     table = exp.table_(entity)
     if alias := join_spec.get('alias'):
@@ -395,8 +536,7 @@ def _jsql_join_to_sqlglot(join_spec: dict[str, Any]) -> dict[str, Any] | None:
     if on_spec := join_spec.get('on'):
         on_cond = _jsql_condition_to_sqlglot(on_spec)
 
-    join_type = join_spec.get('type', JoinType.INNER.value).upper()
-
+    logger.debug(f"Built JOIN: {join_type} {entity}")
     return {
         'table': table,
         'on': on_cond,
@@ -433,13 +573,20 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             'limit': 10
         }
     """
+    logger.info(f"Converting SQL to JSQL, dialect={dialect}")
+    logger.debug(f"Input SQL: {sql}")
+    
     try:
         # Parse SQL with sqlglot
         # Use None for generic dialect
         read_dialect = None if dialect == 'generic' else dialect
+        logger.debug(f"Parsing SQL with dialect: {read_dialect or 'generic'}")
         parsed = sqlglot.parse_one(sql, read=read_dialect)
+        
+        logger.debug(f"Parsed expression type: {type(parsed).__name__}")
 
         if not isinstance(parsed, exp.Select):
+            logger.warning(f"Unsupported query type: {type(parsed).__name__}")
             raise JSQLSyntaxError(
                 message='Only SELECT queries are supported',
                 path='',
@@ -527,11 +674,15 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             if having_jsql:
                 jsql['having'] = having_jsql
 
+        logger.info("Successfully converted SQL to JSQL")
+        logger.debug(f"Generated JSQL: {jsql}")
         return jsql
 
-    except JSQLSyntaxError:
+    except JSQLSyntaxError as e:
+        logger.error(f"Failed to parse SQL: {e}", exc_info=True)
         raise
     except Exception as e:
+        logger.error(f"Unexpected error during SQL parsing: {e}", exc_info=True)
         raise JSQLSyntaxError(
             message=f'Failed to parse SQL: {e!s}',
             path='',
