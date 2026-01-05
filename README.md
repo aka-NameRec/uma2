@@ -118,8 +118,25 @@ UMA is designed for:
 
 ## License
 
-[License information to be added]
+This project is released into the public domain. The contents of this repository are free for any use without restrictions.
 
 ## Contributing
 
-[Contributing guidelines to be added]
+Contributions are welcome, but please note that UMA is a low-level architectural library with a carefully designed core.
+
+If you want to contribute:
+
+- **Bug reports and documentation improvements** are always welcome.
+- **Feature requests** should be discussed via issues before submitting a PR.
+- **Large architectural changes** should be proposed and discussed in advance.
+
+Please keep contributions:
+- focused and minimal
+- consistent with the existing architecture
+- covered with clear reasoning and examples
+
+By contributing, you agree that your contributions will be released into the public domain under the same terms as this project.
+
+## Author
+
+Created by [aka-NameRec](https://github.com/aka-NameRec).
