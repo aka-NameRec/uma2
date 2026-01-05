@@ -9,11 +9,17 @@ authors = [
 ]
 dependencies = [
     "sqlalchemy>=2.0.0",
+    "sqlglot>=25.0.0",
+    "sqlparse>=0.5.0",
+    "typer>=0.12.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/namerec/uma"
 Repository = "https://github.com/namerec/uma"
+
+[project.scripts]
+convert-query = "namerec.uma.scripts.convert_query:main"
 
 [project.optional-dependencies]
 dev = [

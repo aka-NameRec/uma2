@@ -17,13 +17,14 @@ class JSQLResultBuilder:
     """
 
     @staticmethod
-    def build_result(result: CursorResult, query: Any) -> QueryResult:  # noqa: ANN401
+    def build_result(result: CursorResult, query: Any, debug_sql: str | None = None) -> QueryResult:  # noqa: ANN401
         """
         Build QueryResult from SQLAlchemy result.
 
         Args:
             result: SQLAlchemy cursor result
             query: SQLAlchemy query (for column metadata)
+            debug_sql: Optional debug SQL string to include in result
 
         Returns:
             QueryResult with metadata and data
@@ -35,7 +36,7 @@ class JSQLResultBuilder:
         # Extract data rows
         data = JSQLResultBuilder._extract_data(result)
 
-        return QueryResult(meta=meta, data=data)
+        return QueryResult(meta=meta, data=data, debug=debug_sql)
 
     @staticmethod
     def _extract_metadata(result: CursorResult, query: Any) -> list[ColumnMetadata]:  # noqa: ANN401

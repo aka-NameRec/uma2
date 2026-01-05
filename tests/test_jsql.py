@@ -594,3 +594,94 @@ async def test_arithmetic_operators_validation(test_db):
     with pytest.raises(JSQLSyntaxError) as exc_info:
         await uma_select(jsql_missing_right)
     assert '* operator must have "right" field' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_debug_mode(test_db: tuple) -> None:
+    """Test JSQL debug mode returns SQL in response."""
+    # test_db is already initialized via fixture
+    # No need to initialize again
+
+    # Simple query with debug enabled
+    jsql = {
+        'from': 'customers',
+        'select': [{'field': 'id'}, {'field': 'name'}],
+        'where': {
+            'op': '=',
+            'left': {'field': 'active'},
+            'right': {'value': 1},
+        },
+        'debug': True,  # Enable debug mode
+    }
+
+    result = await uma_select(jsql)
+
+    # Check that debug SQL is present
+    assert 'debug' in result
+    assert result['debug'] is not None
+    assert isinstance(result['debug'], str)
+
+    # Check that debug SQL contains expected keywords
+    debug_sql = result['debug']
+    assert 'SELECT' in debug_sql
+    assert 'FROM' in debug_sql
+    assert 'customers' in debug_sql
+    assert 'WHERE' in debug_sql
+
+    # Check that data is still returned normally
+    assert 'meta' in result
+    assert 'data' in result
+    assert len(result['data']) > 0
+
+
+@pytest.mark.asyncio
+async def test_debug_mode_disabled(test_db: tuple) -> None:
+    """Test that debug SQL is not included when debug mode is disabled."""
+    # test_db is already initialized via fixture
+    # No need to initialize again
+
+    # Query without debug
+    jsql = {
+        'from': 'customers',
+        'select': [{'field': 'id'}],
+    }
+
+    result = await uma_select(jsql)
+
+    # Check that debug SQL is not present
+    assert 'debug' not in result or result.get('debug') is None
+
+
+@pytest.mark.asyncio
+async def test_debug_mode_with_in_operator(test_db: tuple) -> None:
+    """Test debug mode with IN operator (complex type that may fail literal_binds)."""
+    # test_db is already initialized via fixture
+    # No need to initialize again
+
+    # Query with IN operator and debug enabled
+    jsql = {
+        'from': 'customers',
+        'select': [{'field': 'id'}, {'field': 'name'}],
+        'where': {
+            'op': 'IN',
+            'left': {'field': 'id'},
+            'right': [1, 2, 3],  # List of values for IN operator
+        },
+        'debug': True,  # Enable debug mode
+    }
+
+    # This should not raise an error even if literal_binds fails
+    result = await uma_select(jsql)
+
+    # Check that query executed successfully
+    assert 'data' in result
+    assert len(result['data']) > 0
+
+    # Check that debug SQL is present (may contain parameters or error message)
+    assert 'debug' in result
+    assert result['debug'] is not None
+    assert isinstance(result['debug'], str)
+
+    # Debug SQL should contain query structure even if parameters aren't substituted
+    debug_sql = result['debug']
+    assert 'SELECT' in debug_sql or 'Failed to generate' in debug_sql
