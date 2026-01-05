@@ -6,6 +6,7 @@ import sqlglot
 import sqlglot.expressions as exp
 import sqlparse
 
+from namerec.uma.jsql.constants import LOGICAL_OPERATORS
 from namerec.uma.jsql.constants import JSQLOperator
 from namerec.uma.jsql.constants import JoinType
 from namerec.uma.jsql.constants import OrderDirection
@@ -14,6 +15,53 @@ from namerec.uma.jsql.types import JSQLExpression
 from namerec.uma.jsql.types import JSQLQuery
 
 __all__ = ['jsql_to_sql', 'sql_to_jsql']
+
+
+# Operator mappings for JSQL -> SQL conversion
+ARITHMETIC_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
+    JSQLOperator.ADD.value: exp.Add,
+    JSQLOperator.SUB.value: exp.Sub,
+    JSQLOperator.MUL.value: exp.Mul,
+    JSQLOperator.DIV.value: exp.Div,
+}
+
+COMPARISON_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
+    JSQLOperator.EQ.value: exp.EQ,
+    JSQLOperator.NE.value: exp.NEQ,
+    JSQLOperator.GT.value: exp.GT,
+    JSQLOperator.GE.value: exp.GTE,
+    JSQLOperator.LT.value: exp.LT,
+    JSQLOperator.LE.value: exp.LTE,
+}
+
+LOGICAL_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
+    JSQLOperator.AND.value: exp.And,
+    JSQLOperator.OR.value: exp.Or,
+}
+
+# Reverse mappings for SQL -> JSQL conversion
+SQLGLOT_TO_ARITHMETIC: dict[type[exp.Expression], str] = {
+    exp.Add: JSQLOperator.ADD.value,
+    exp.Sub: JSQLOperator.SUB.value,
+    exp.Mul: JSQLOperator.MUL.value,
+    exp.Div: JSQLOperator.DIV.value,
+}
+
+SQLGLOT_TO_COMPARISON: dict[type[exp.Expression], str] = {
+    exp.EQ: JSQLOperator.EQ.value,
+    exp.NEQ: JSQLOperator.NE.value,
+    exp.GT: JSQLOperator.GT.value,
+    exp.GTE: JSQLOperator.GE.value,
+    exp.LT: JSQLOperator.LT.value,
+    exp.LTE: JSQLOperator.LE.value,
+}
+
+# Join type mapping for SQL -> JSQL
+SQLGLOT_JOIN_SIDE_TO_TYPE: dict[str, str] = {
+    'LEFT': JoinType.LEFT.value,
+    'RIGHT': JoinType.RIGHT.value,
+    'FULL': JoinType.FULL.value,
+}
 
 
 def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
@@ -73,7 +121,7 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
                     query = query.join(
                         join_expr['table'],
                         on=join_expr.get('on'),
-                        join_type=join_expr.get('type', 'INNER'),
+                        join_type=join_expr.get('type', JoinType.INNER.value),
                     )
 
         # Add GROUP BY
@@ -94,7 +142,8 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
             for order_spec in order_by:
                 order_expr = _jsql_expression_to_sqlglot(order_spec.get('field') or order_spec)
                 if order_expr:
-                    desc = order_spec.get('direction', 'ASC').upper() == 'DESC'
+                    direction = order_spec.get('direction', OrderDirection.ASC.value).upper()
+                    desc = direction == OrderDirection.DESC.value.upper()
                     query = query.order_by(order_expr, desc=desc)
 
         # Add LIMIT
@@ -210,8 +259,12 @@ def _convert_literal_value(value: Any) -> exp.Expression:  # noqa: ANN401
 def _convert_function_call(expr_spec: dict[str, Any]) -> exp.Expression:
     """Convert function call to sqlglot expression."""
     func = expr_spec['func']
-    args = [_jsql_expression_to_sqlglot(arg) for arg in expr_spec.get('args', [])]
-    args = [arg for arg in args if arg is not None]
+    # Single pass: convert and filter None values in one comprehension
+    args = [
+        converted
+        for arg in expr_spec.get('args', [])
+        if (converted := _jsql_expression_to_sqlglot(arg)) is not None
+    ]
     
     # Try to find specific sqlglot function class
     func_class = getattr(exp, func.upper(), None)
@@ -223,7 +276,7 @@ def _convert_function_call(expr_spec: dict[str, Any]) -> exp.Expression:
 
 
 def _convert_arithmetic_op(expr_spec: dict[str, Any]) -> exp.Expression | None:
-    """Convert arithmetic operation to sqlglot expression using pattern matching."""
+    """Convert arithmetic operation to sqlglot expression."""
     op = expr_spec['op']
     left = _jsql_expression_to_sqlglot(expr_spec.get('left'))
     right = _jsql_expression_to_sqlglot(expr_spec.get('right'))
@@ -231,17 +284,12 @@ def _convert_arithmetic_op(expr_spec: dict[str, Any]) -> exp.Expression | None:
     if not left or not right:
         return None
     
-    match op:
-        case '+':
-            return exp.Add(this=left, expression=right)
-        case '-':
-            return exp.Sub(this=left, expression=right)
-        case '*':
-            return exp.Mul(this=left, expression=right)
-        case '/':
-            return exp.Div(this=left, expression=right)
-        case _:
-            return None
+    # Use mapping instead of match statement
+    operator_class = ARITHMETIC_OP_TO_SQLGLOT.get(op)
+    if operator_class:
+        return operator_class(this=left, expression=right)
+    
+    return None
 
 
 def _jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression | None:
@@ -257,8 +305,8 @@ def _jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression | No
     if not op:
         return None
 
-    # Try logical operators first
-    if op in ('AND', 'OR', 'NOT'):
+    # Try logical operators first (use constant set)
+    if op in LOGICAL_OPERATORS:
         return _convert_logical_operator(op, cond_spec)
 
     # Then try comparison operators
@@ -267,31 +315,33 @@ def _jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression | No
 
 def _convert_logical_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression | None:
     """Convert logical operator (AND/OR/NOT) to sqlglot expression."""
-    match op:
-        case 'AND' | 'OR':
-            conditions = cond_spec.get('conditions', [])
-            if not conditions:
-                return None
-            
-            result = _jsql_condition_to_sqlglot(conditions[0])
-            operator_class = exp.And if op == 'AND' else exp.Or
-            
-            for cond in conditions[1:]:
-                next_cond = _jsql_condition_to_sqlglot(cond)
-                if result and next_cond:
-                    result = operator_class(this=result, expression=next_cond)
-            return result
-        
-        case 'NOT':
-            condition = _jsql_condition_to_sqlglot(cond_spec.get('condition', {}))
-            return exp.Not(this=condition) if condition else None
-        
-        case _:
+    # Handle AND/OR operators
+    if op in (JSQLOperator.AND.value, JSQLOperator.OR.value):
+        conditions = cond_spec.get('conditions', [])
+        if not conditions:
             return None
+        
+        result = _jsql_condition_to_sqlglot(conditions[0])
+        operator_class = LOGICAL_OP_TO_SQLGLOT.get(op)
+        if not operator_class:
+            return None
+        
+        for cond in conditions[1:]:
+            next_cond = _jsql_condition_to_sqlglot(cond)
+            if result and next_cond:
+                result = operator_class(this=result, expression=next_cond)
+        return result
+    
+    # Handle NOT operator
+    if op == JSQLOperator.NOT.value:
+        condition = _jsql_condition_to_sqlglot(cond_spec.get('condition', {}))
+        return exp.Not(this=condition) if condition else None
+    
+    return None
 
 
 def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression | None:
-    """Convert comparison operator to sqlglot expression using pattern matching."""
+    """Convert comparison operator to sqlglot expression."""
     # Get left side (field)
     field_expr = _jsql_expression_to_sqlglot(cond_spec.get('field', ''))
     if not field_expr:
@@ -304,33 +354,28 @@ def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expr
     elif 'right_field' in cond_spec:
         right_expr = _jsql_expression_to_sqlglot(cond_spec['right_field'])
 
-    # Pattern match on operator
-    match op:
-        case '=':
-            return exp.EQ(this=field_expr, expression=right_expr)
-        case '!=':
-            return exp.NEQ(this=field_expr, expression=right_expr)
-        case '>':
-            return exp.GT(this=field_expr, expression=right_expr)
-        case '>=':
-            return exp.GTE(this=field_expr, expression=right_expr)
-        case '<':
-            return exp.LT(this=field_expr, expression=right_expr)
-        case '<=':
-            return exp.LTE(this=field_expr, expression=right_expr)
-        case 'IN':
-            values = cond_spec.get('values', [])
-            val_exprs = [_jsql_expression_to_sqlglot({'value': v}) for v in values]
-            return exp.In(this=field_expr, expressions=val_exprs)
-        case 'LIKE':
-            pattern = cond_spec.get('pattern', '')
-            return exp.Like(this=field_expr, expression=exp.Literal.string(pattern))
-        case 'IS NULL':
-            return exp.Is(this=field_expr, expression=exp.Null())
-        case 'IS NOT NULL':
-            return exp.Not(this=exp.Is(this=field_expr, expression=exp.Null()))
-        case _:
-            return None
+    # Handle standard comparison operators using mapping
+    operator_class = COMPARISON_OP_TO_SQLGLOT.get(op)
+    if operator_class and right_expr:
+        return operator_class(this=field_expr, expression=right_expr)
+    
+    # Handle special operators
+    if op == JSQLOperator.IN.value:
+        values = cond_spec.get('values', [])
+        val_exprs = [_jsql_expression_to_sqlglot({'value': v}) for v in values]
+        return exp.In(this=field_expr, expressions=val_exprs)
+    
+    if op == JSQLOperator.LIKE.value:
+        pattern = cond_spec.get('pattern', '')
+        return exp.Like(this=field_expr, expression=exp.Literal.string(pattern))
+    
+    if op == JSQLOperator.IS_NULL.value:
+        return exp.Is(this=field_expr, expression=exp.Null())
+    
+    if op == JSQLOperator.IS_NOT_NULL.value:
+        return exp.Not(this=exp.Is(this=field_expr, expression=exp.Null()))
+    
+    return None
 
 
 def _jsql_join_to_sqlglot(join_spec: dict[str, Any]) -> dict[str, Any] | None:
@@ -350,7 +395,7 @@ def _jsql_join_to_sqlglot(join_spec: dict[str, Any]) -> dict[str, Any] | None:
     if on_spec := join_spec.get('on'):
         on_cond = _jsql_condition_to_sqlglot(on_spec)
 
-    join_type = join_spec.get('type', 'INNER').upper()
+    join_type = join_spec.get('type', JoinType.INNER.value).upper()
 
     return {
         'table': table,
@@ -521,27 +566,27 @@ def _convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression | None:
     # Handle functions
     if isinstance(expr, exp.Func):
         func_name = expr.sql_name()
-        args = [_convert_expression_to_jsql(arg) for arg in expr.args.values() if isinstance(arg, exp.Expression)]
-        args = [arg for arg in args if arg is not None]  # Filter None values
+        # Single pass: type check, convert, and filter in one comprehension
+        args = [
+            converted
+            for arg in expr.args.values()
+            if isinstance(arg, exp.Expression) and (converted := _convert_expression_to_jsql(arg)) is not None
+        ]
 
         return {
             'func': func_name,
-            'args': args if args else [],
+            'args': args,
         }
 
-    # Handle binary operations
+    # Handle binary operations (use reverse mapping)
     if isinstance(expr, (exp.Add, exp.Sub, exp.Mul, exp.Div)):
-        op_map = {
-            exp.Add: '+',
-            exp.Sub: '-',
-            exp.Mul: '*',
-            exp.Div: '/',
-        }
-        return {
-            'op': op_map[type(expr)],
-            'left': _convert_expression_to_jsql(expr.left),
-            'right': _convert_expression_to_jsql(expr.right),
-        }
+        op = SQLGLOT_TO_ARITHMETIC.get(type(expr))
+        if op:
+            return {
+                'op': op,
+                'left': _convert_expression_to_jsql(expr.left),
+                'right': _convert_expression_to_jsql(expr.right),
+            }
 
     # Default: return None for unsupported expressions
     return None
@@ -575,23 +620,19 @@ def _convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any] | None:
             'condition': _convert_condition_to_jsql(expr.this),
         }
 
-    # Handle comparison operators
+    # Handle comparison operators (use reverse mapping)
     if isinstance(expr, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)):
-        op_map = {
-            exp.EQ: '=',
-            exp.NEQ: '!=',
-            exp.GT: '>',
-            exp.GTE: '>=',
-            exp.LT: '<',
-            exp.LTE: '<=',
-        }
+        op = SQLGLOT_TO_COMPARISON.get(type(expr))
+        if not op:
+            return None
+        
         left = _convert_expression_to_jsql(expr.left)
         right = _convert_expression_to_jsql(expr.right)
 
         if left and 'field' in left and right:
             result: dict[str, Any] = {
                 'field': left['field'],
-                'op': op_map[type(expr)],
+                'op': op,
             }
             if 'value' in right:
                 result['value'] = right['value']
@@ -646,15 +687,10 @@ def _convert_join_to_jsql(join: exp.Join) -> dict[str, Any] | None:
     if not isinstance(join, exp.Join):
         return None
 
-    # Get join type
+    # Get join type (use constant mapping)
     join_type = JoinType.INNER.value
     if join.side:
-        side_map = {
-            'LEFT': JoinType.LEFT.value,
-            'RIGHT': JoinType.RIGHT.value,
-            'FULL': JoinType.FULL.value,
-        }
-        join_type = side_map.get(join.side, JoinType.INNER.value)
+        join_type = SQLGLOT_JOIN_SIDE_TO_TYPE.get(join.side, JoinType.INNER.value)
 
     # Get joined table
     table = join.this
@@ -689,9 +725,8 @@ def _convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any] | None:
         return None
 
     result = field_expr.copy()
-    # Uppercase direction to match JSQL spec
-    result['direction'] = (
-        OrderDirection.DESC.value if order_expr.args.get('desc') else OrderDirection.ASC.value
-    ).upper()
+    # Use OrderDirection constant and uppercase for consistency
+    direction = OrderDirection.DESC if order_expr.args.get('desc') else OrderDirection.ASC
+    result['direction'] = direction.value.upper()
 
     return result
