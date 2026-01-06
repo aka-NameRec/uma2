@@ -1,6 +1,7 @@
 [project]
 name = "namerec-uma"
-version = "2.0"
+version = "2.1"
+release_date = "2026-01-06"
 description = "Unified Model Access - A Python package for unified database access via JSON-SQL queries"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,11 +10,17 @@ authors = [
 ]
 dependencies = [
     "sqlalchemy>=2.0.0",
+    "sqlglot>=25.0.0",
+    "sqlparse>=0.5.0",
+    "typer>=0.12.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/namerec/uma"
 Repository = "https://github.com/namerec/uma"
+
+[project.scripts]
+convert-query = "namerec.uma.scripts.convert_query:main"
 
 [project.optional-dependencies]
 dev = [

@@ -44,18 +44,22 @@ class QueryResult:
 
     meta: list[ColumnMetadata]
     data: list[list[Any]]
+    debug: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """
         Convert to dictionary for JSON serialization.
 
         Returns:
-            Dictionary with 'meta' and 'data' keys
+            Dictionary with 'meta' and 'data' keys, optionally 'debug'
         """
-        return {
+        result: dict[str, Any] = {
             'meta': [col.to_dict() for col in self.meta],
             'data': self.data,
         }
+        if self.debug is not None:
+            result['debug'] = self.debug
+        return result
 
 
 # Type aliases for JSQL structure

@@ -2,6 +2,8 @@
 
 from typing import Any
 
+import sqlparse
+
 from namerec.uma.core.context import UMAContext
 from namerec.uma.jsql.exceptions import JSQLExecutionError
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
@@ -46,12 +48,17 @@ class JSQLExecutor:
             # Parse JSQL to SQLAlchemy query
             query = await self.parser.parse(jsql, params)
 
+            # Generate debug SQL if requested
+            debug_sql: str | None = None
+            if jsql.get('debug', False):
+                debug_sql = self._compile_query_to_sql(query)
+
             # Execute query
             async with self.context.engine.connect() as conn:
                 result = await conn.execute(query)
 
                 # Build result with metadata
-                query_result = JSQLResultBuilder.build_result(result, query)
+                query_result = JSQLResultBuilder.build_result(result, query, debug_sql)
 
                 return query_result
 
@@ -65,3 +72,40 @@ class JSQLExecutor:
                 query=jsql,
                 original_error=e,
             ) from e
+
+    def _compile_query_to_sql(self, query: Any) -> str:  # noqa: ANN401
+        """
+        Compile SQLAlchemy query to SQL string.
+
+        Args:
+            query: SQLAlchemy Select statement
+
+        Returns:
+            Formatted SQL string, or error message if compilation fails
+        """
+        try:
+            # Try to compile with literal binds first (substitute parameters)
+            try:
+                compiled = query.compile(
+                    compile_kwargs={'literal_binds': True},
+                )
+                sql_str = str(compiled)
+            except Exception:
+                # Fallback: compile without literal binds if it fails
+                # (e.g., for complex types like lists in IN operator)
+                compiled = query.compile()
+                sql_str = str(compiled)
+
+            # Format SQL for readability
+            formatted_sql = sqlparse.format(
+                sql_str,
+                reindent=True,
+                keyword_case='upper',
+            )
+
+            return formatted_sql
+
+        except Exception as e:
+            # Debug mode should never break query execution
+            # Return error message instead
+            return f'-- Failed to generate debug SQL: {e!s}'

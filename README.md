@@ -41,6 +41,12 @@ Integration points for implementing custom permission checks on tables accessed 
 ### 5. CRUD Operations
 Full support for Create, Read, Update, Delete operations with the same permission model.
 
+### 6. SQL ↔ JSQL Conversion
+Bidirectional conversion between SQL and JSQL formats:
+- **Debug Mode**: View generated SQL alongside query results
+- **Console Scripts**: Convert between SQL and JSQL from command line
+- **Programmatic API**: Use conversion functions in your code
+
 ## Architecture
 
 ```
@@ -108,10 +114,67 @@ UMA is designed for:
 - Projects needing m2m (many-to-many) field support in frontend forms
 - Applications with custom permission systems
 
+## Quick Examples
+
+### Basic JSQL Query
+
+```python
+import asyncio
+from namerec.uma import initialize_uma, uma_select
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import MetaData
+
+async def main():
+    # Initialize UMA
+    engine = create_async_engine('sqlite+aiosqlite:///mydb.db')
+    metadata = MetaData()
+    await engine.run_sync(metadata.reflect)
+    initialize_uma(engine=engine, metadata=metadata)
+
+    # Execute JSQL query
+    jsql = {
+        "from": "users",
+        "select": [{"field": "id"}, {"field": "name"}],
+        "where": {"field": "active", "op": "=", "value": True},
+        "limit": 10
+    }
+    
+    result = await uma_select(jsql)
+    print(result.to_dict())
+
+asyncio.run(main())
+```
+
+### Debug Mode
+
+```python
+# Enable debug mode to see generated SQL
+jsql = {
+    "from": "users",
+    "select": [{"field": "id"}],
+    "debug": True  # Returns SQL in response
+}
+
+result = await uma_select(jsql)
+print(result.to_dict()['debug'])  # Formatted SQL
+```
+
+### SQL ↔ JSQL Conversion
+
+```bash
+# Auto-detect format and convert
+echo '{"from": "users", "select": [{"field": "*"}]}' | uv run convert-query
+echo "SELECT * FROM users WHERE id = 1" | uv run convert-query
+
+# Force specific output format
+echo "SELECT id FROM users" | uv run convert-query --format jsql
+```
+
 ## Documentation
 
 - [Quick Start Guide](docs/20260104-195802-doc-QUICKSTART.md) - Get started with UMA in minutes
 - [JSQL Specification](docs/20260104-220450-doc-JSQL_SPECIFICATION.md) - Complete JSQL (JSON-SQL) query syntax and examples
+- [SQL ↔ JSQL Conversion Guide](docs/20260105-160000-doc-SQL_JSQL_CONVERSION.md) - Debug mode and conversion tools
 - [API Summary](docs/20260104-195632-doc-API_SUMMARY.md) - Complete API reference and examples
 - [API Implementation Summary](docs/20260104-195602-doc-API_IMPLEMENTATION_SUMMARY.md) - Implementation details and internals
 - [Project Structure](docs/20260104-195714-doc-PROJECT_STRUCTURE.md) - Architecture and design documentation
