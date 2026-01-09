@@ -14,9 +14,11 @@ from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from namerec.uma import DefaultMetadataProvider
 from namerec.uma import JSQLExecutionError
 from namerec.uma import JSQLSyntaxError
-from namerec.uma import initialize_uma
+from namerec.uma import NamespaceConfig
+from namerec.uma import uma_initialize
 from namerec.uma import uma_select
 
 
@@ -74,7 +76,16 @@ async def test_db():
         )
 
     # Initialize UMA
-    initialize_uma(engine, metadata)
+    metadata_provider = DefaultMetadataProvider()
+    uma_initialize({
+        'test': NamespaceConfig(
+            engine=engine,
+            metadata_provider=metadata_provider,
+        ),
+    })
+    
+    # Preload metadata
+    await metadata_provider.preload(engine, namespace='test')
 
     yield engine, metadata
 

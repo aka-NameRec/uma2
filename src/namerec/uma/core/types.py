@@ -6,7 +6,9 @@ from typing import Any
 from typing import Protocol
 from typing import runtime_checkable
 
+from sqlalchemy import Engine
 from sqlalchemy import Select
+from sqlalchemy import Table
 
 
 class Operation(str, Enum):
@@ -159,7 +161,15 @@ class EntityHandler(Protocol):
 
 @runtime_checkable
 class MetadataProvider(Protocol):
-    """Protocol for metadata providers."""
+    """
+    Protocol for metadata providers.
+
+    Metadata providers are responsible for:
+    - Lazy loading of database schema (via reflect())
+    - Listing entities in a namespace
+    - Checking entity existence
+    - Providing entity metadata
+    """
 
     async def get_metadata(
         self,
@@ -178,6 +188,86 @@ class MetadataProvider(Protocol):
         """
         ...
 
+    async def list_entities(
+        self,
+        namespace: str,
+        context: 'UMAContext',
+    ) -> list[str]:
+        """
+        List all entities in namespace.
+
+        Args:
+            namespace: Namespace name
+            context: Execution context
+
+        Returns:
+            List of entity names (without namespace prefix)
+
+        Raises:
+            ValueError: If namespace not found
+            ConnectionError: If cannot connect to database
+        """
+        ...
+
+    async def entity_exists(
+        self,
+        entity_name: EntityName,
+        context: 'UMAContext',
+    ) -> bool:
+        """
+        Check if entity exists in namespace.
+
+        Args:
+            entity_name: Entity name
+            context: Execution context
+
+        Returns:
+            True if entity exists, False otherwise
+
+        Raises:
+            ValueError: If namespace not found
+            ConnectionError: If cannot connect to database
+        """
+        ...
+
+    async def get_table(
+        self,
+        entity_name: EntityName,
+        engine: Engine,
+        context: 'UMAContext | None' = None,
+    ) -> Table:
+        """
+        Get SQLAlchemy Table object for entity (lazy loading).
+
+        Performs reflect() if needed and caches result.
+
+        Args:
+            entity_name: Entity name
+            engine: SQLAlchemy Engine for the namespace
+            context: Optional UMAContext to cache metadata in
+
+        Returns:
+            SQLAlchemy Table object
+
+        Raises:
+            UMANotFoundError: If table not found
+            RuntimeError: If reflection fails
+        """
+        ...
+
+    async def preload(self, engine: Engine, namespace: str = 'default') -> None:
+        """
+        Preload metadata (optional, for production).
+
+        Call after uma_initialize() to avoid first-request latency.
+        This method is optional and may be a no-op for some providers.
+
+        Args:
+            engine: SQLAlchemy Engine for the namespace
+            namespace: Namespace to preload (default: 'default')
+        """
+        ...
+
 
 # Forward declaration for type checking
-from namerec.uma.core.context import UMAContext  # noqa: E402, F401
+from namerec.uma.core.context import UMAContext  # noqa: E402

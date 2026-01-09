@@ -1,7 +1,5 @@
 """Entity registry for UMA."""
 
-from typing import Any
-from typing import ClassVar
 
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMANotFoundError
@@ -55,13 +53,19 @@ class EntityRegistry:
         key = str(entity_name) if isinstance(entity_name, EntityName) else entity_name
         self._handlers.pop(key, None)
 
-    def get_handler(
+    async def get_handler(
         self,
         entity_name: EntityName,
         context: UMAContext,
     ) -> type[EntityHandler]:
         """
         Get handler for an entity.
+
+        Logic:
+        1. Check explicit registration (custom handler)
+        2. Check if entity exists via MetadataProvider
+        3. If exists → return default_handler
+        4. If not → raise UMANotFoundError
 
         Args:
             entity_name: Entity name
@@ -71,15 +75,15 @@ class EntityRegistry:
             Handler class
 
         Raises:
-            UMANotFoundError: If entity not registered and not in database
+            UMANotFoundError: If entity not registered and not found in database
         """
-        # 1. Check explicit registrations
+        # 1. Check explicit registrations (custom handlers)
         key = str(entity_name)
         if key in self._handlers:
             return self._handlers[key]
 
-        # 2. Check database tables
-        if entity_name.entity in context.metadata.tables:
+        # 2. Check if entity exists via MetadataProvider
+        if await context.metadata_provider.entity_exists(entity_name, context):
             return self._default_handler  # type: ignore[return-value]
 
         # 3. Not found
@@ -94,25 +98,22 @@ class EntityRegistry:
         """
         self._default_handler = handler
 
-    def list_entities(self, context: UMAContext) -> list[str]:
+    async def list_entities(self, context: UMAContext) -> list[str]:
         """
-        List all registered entities and database tables.
+        List all registered custom handlers.
+
+        Note: This only lists explicitly registered custom handlers,
+        not database entities. Use MetadataProvider.list_entities()
+        to get all database entities.
 
         Args:
             context: Execution context
 
         Returns:
-            List of entity names
+            List of registered entity names
         """
-        # Registered entities
-        registered = set(self._handlers.keys())
-
-        # Database tables
-        db_tables = set(context.metadata.tables.keys())
-
-        # Combine and sort
-        all_entities = registered | db_tables
-        return sorted(all_entities)
+        # Only registered custom handlers
+        return sorted(self._handlers.keys())
 
 
 # Global registry singleton

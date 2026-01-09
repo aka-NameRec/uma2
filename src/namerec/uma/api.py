@@ -1,58 +1,83 @@
 """High-level API functions for UMA."""
 
+from collections.abc import Mapping
 from typing import Any
-
-from sqlalchemy import Engine
-from sqlalchemy import MetaData
 
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMAAccessDeniedError
+from namerec.uma.core.namespace_config import NamespaceConfig
+from namerec.uma.core.namespace_config import get_default_namespace
+from namerec.uma.core.namespace_config import get_namespace_config
+from namerec.uma.core.namespace_config import set_namespace_configs
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
-from namerec.uma.core.types import MetadataProvider
 from namerec.uma.core.types import Operation
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
-from namerec.uma.metadata import DefaultMetadataProvider
 from namerec.uma.registry import EntityRegistry
 
 # Global objects (initialized at startup)
 _registry: EntityRegistry | None = None
-_context_template: UMAContext | None = None
 
 
-def initialize_uma(
-    engine: Engine,
-    metadata: MetaData,
-    metadata_provider: MetadataProvider | None = None,
+def uma_initialize(
+    namespace_configs: Mapping[str, NamespaceConfig],
     default_handler: type[EntityHandler] | None = None,
 ) -> EntityRegistry:
     """
-    Initialize UMA.
+    Initialize UMA with namespace configurations.
 
     Args:
-        engine: SQLAlchemy Engine
-        metadata: SQLAlchemy MetaData (reflected)
-        metadata_provider: Metadata provider (if None - creates DefaultMetadataProvider)
-        default_handler: Default handler (if None - uses DefaultEntityHandler)
+        namespace_configs: Mapping {namespace: NamespaceConfig}
+        default_handler: Default handler class for unregistered entities
 
     Returns:
         Initialized EntityRegistry
-    """
-    global _registry, _context_template  # noqa: PLW0603
 
+    Raises:
+        ValueError: If namespace_configs is empty
+
+    Behaviour:
+    - If single namespace: it becomes default
+    - If multiple namespaces: no default, explicit namespace required
+
+    Example:
+        # Single namespace (typical case)
+        uma_initialize({
+            'main': NamespaceConfig(
+                engine=engine,
+                metadata_provider=DefaultMetadataProvider(),
+            ),
+        })
+
+        # Multiple namespaces
+        uma_initialize({
+            'db1': NamespaceConfig(...),
+            'db2': NamespaceConfig(...),
+        })
+    """
+    if not namespace_configs:
+        msg = 'At least one namespace configuration required'
+        raise ValueError(msg)
+
+    # Determine default namespace
+    if len(namespace_configs) == 1:
+        default_ns = next(iter(namespace_configs.keys()))
+    else:
+        default_ns = None  # Explicit namespace required
+
+    # Store configs
+    set_namespace_configs(namespace_configs, default_ns)
+
+    # Initialize registry
+    global _registry  # noqa: PLW0603
     _registry = EntityRegistry(default_handler or DefaultEntityHandler)
 
-    if metadata_provider is None:
-        metadata_provider = DefaultMetadataProvider()
-
-    _context_template = UMAContext(
-        engine=engine,
-        metadata=metadata,
-        metadata_provider=metadata_provider,
-    )
-
     return _registry
+
+
+# Legacy alias for backward compatibility
+initialize_uma = uma_initialize
 
 
 def get_registry() -> EntityRegistry:
@@ -71,11 +96,16 @@ def get_registry() -> EntityRegistry:
     return _registry
 
 
-def _create_context(user_context: Any = None, **extra: Any) -> UMAContext:  # noqa: ANN401
+def _create_context(
+    namespace: str | None = None,
+    user_context: Any = None,
+    **extra: Any,
+) -> UMAContext:
     """
     Create context for operation.
 
     Args:
+        namespace: Namespace name (None = use default)
         user_context: User context for access control
         **extra: Additional context fields
 
@@ -84,17 +114,22 @@ def _create_context(user_context: Any = None, **extra: Any) -> UMAContext:  # no
 
     Raises:
         RuntimeError: If UMA not initialized
+        ValueError: If namespace not found or default not set
     """
-    if _context_template is None:
-        msg = 'UMA not initialized. Call initialize_uma() first.'
+    # Get namespace config (resolves default if namespace is None)
+    config = get_namespace_config(namespace)
+
+    # Determine actual namespace name
+    actual_namespace = namespace or get_default_namespace()
+    if actual_namespace is None:
+        msg = 'Cannot determine namespace'
         raise RuntimeError(msg)
 
     return UMAContext(
-        engine=_context_template.engine,
-        metadata=_context_template.metadata,
-        metadata_provider=_context_template.metadata_provider,
+        engine=config.engine,
+        metadata_provider=config.metadata_provider,
+        namespace=actual_namespace,
         user_context=user_context,
-        cache=_context_template.cache,
         extra=extra,
     )
 
@@ -129,8 +164,8 @@ def _check_access(
 
 async def uma_read(
     entity_name: str,
-    id_value: Any,  # noqa: ANN401
-    user_context: Any = None,  # noqa: ANN401
+    id_value: Any,
+    user_context: Any = None,
     namespace: str | None = None,
 ) -> dict:
     """
@@ -150,27 +185,28 @@ async def uma_read(
         UMANotFoundError: If record not found
         RuntimeError: If UMA not initialized
     """
-    context = _create_context(user_context)
-
-    # Check access
-    _check_access(entity_name, Operation.READ, context)
-
     # Parse entity name
     entity = parse_entity_name(entity_name)
     if namespace and not entity.namespace:
         entity = EntityName(entity=entity.entity, namespace=namespace)
 
+    # Create context for namespace
+    context = _create_context(entity.namespace, user_context)
+
+    # Check access
+    _check_access(str(entity), Operation.READ, context)
+
     # Get handler and execute
-    handler = get_registry().get_handler(entity, context)
+    handler = await get_registry().get_handler(entity, context)
     return await handler.read(entity, id_value, context)
 
 
 async def uma_save(
     entity_name: str,
     data: dict,
-    user_context: Any = None,  # noqa: ANN401
+    user_context: Any = None,
     namespace: str | None = None,
-) -> Any:  # noqa: ANN401
+) -> Any:
     """
     Save a record (create if id=None, otherwise update).
 
@@ -188,7 +224,13 @@ async def uma_save(
         UMANotFoundError: If record not found (for update)
         RuntimeError: If UMA not initialized
     """
-    context = _create_context(user_context)
+    # Parse entity name
+    entity = parse_entity_name(entity_name)
+    if namespace and not entity.namespace:
+        entity = EntityName(entity=entity.entity, namespace=namespace)
+
+    # Create context for namespace
+    context = _create_context(entity.namespace, user_context)
 
     # Determine operation (create or update)
     # Check if record has ID to determine if it's create or update
@@ -196,22 +238,17 @@ async def uma_save(
     operation = Operation.UPDATE if has_id else Operation.CREATE
 
     # Check access
-    _check_access(entity_name, operation, context)
-
-    # Parse entity name
-    entity = parse_entity_name(entity_name)
-    if namespace and not entity.namespace:
-        entity = EntityName(entity=entity.entity, namespace=namespace)
+    _check_access(str(entity), operation, context)
 
     # Get handler and execute
-    handler = get_registry().get_handler(entity, context)
+    handler = await get_registry().get_handler(entity, context)
     return await handler.save(entity, data, context)
 
 
 async def uma_delete(
     entity_name: str,
-    id_value: Any,  # noqa: ANN401
-    user_context: Any = None,  # noqa: ANN401
+    id_value: Any,
+    user_context: Any = None,
     namespace: str | None = None,
 ) -> bool:
     """
@@ -231,24 +268,25 @@ async def uma_delete(
         UMANotFoundError: If record not found
         RuntimeError: If UMA not initialized
     """
-    context = _create_context(user_context)
-
-    # Check access
-    _check_access(entity_name, Operation.DELETE, context)
-
     # Parse entity name
     entity = parse_entity_name(entity_name)
     if namespace and not entity.namespace:
         entity = EntityName(entity=entity.entity, namespace=namespace)
 
+    # Create context for namespace
+    context = _create_context(entity.namespace, user_context)
+
+    # Check access
+    _check_access(str(entity), Operation.DELETE, context)
+
     # Get handler and execute
-    handler = get_registry().get_handler(entity, context)
+    handler = await get_registry().get_handler(entity, context)
     return await handler.delete(entity, id_value, context)
 
 
 async def uma_meta(
     entity_name: str,
-    user_context: Any = None,  # noqa: ANN401
+    user_context: Any = None,
     namespace: str | None = None,
 ) -> dict:
     """
@@ -267,23 +305,24 @@ async def uma_meta(
         UMANotFoundError: If entity not found
         RuntimeError: If UMA not initialized
     """
-    context = _create_context(user_context)
-
-    # Check access
-    _check_access(entity_name, Operation.META, context)
-
     # Parse entity name
     entity = parse_entity_name(entity_name)
     if namespace and not entity.namespace:
         entity = EntityName(entity=entity.entity, namespace=namespace)
 
+    # Create context for namespace
+    context = _create_context(entity.namespace, user_context)
+
+    # Check access
+    _check_access(str(entity), Operation.META, context)
+
     # Get handler and execute
-    handler = get_registry().get_handler(entity, context)
+    handler = await get_registry().get_handler(entity, context)
     return await handler.meta(entity, context)
 
 
 async def uma_list_entities(
-    user_context: Any = None,  # noqa: ANN401
+    user_context: Any = None,
     namespace: str | None = None,
 ) -> list[str]:
     """
@@ -291,36 +330,40 @@ async def uma_list_entities(
 
     Args:
         user_context: User context for access control
-        namespace: Optional namespace filter
+        namespace: Optional namespace filter (None = use default)
 
     Returns:
-        List of entity names
+        List of entity names (with namespace prefix if not default)
 
     Raises:
         UMAAccessDeniedError: If access denied
         RuntimeError: If UMA not initialized
+        ValueError: If namespace not found
     """
-    context = _create_context(user_context)
+    # Create context for namespace
+    context = _create_context(namespace, user_context)
 
     # Check access (empty entity_name means "list entities" operation)
     _check_access('', Operation.META, context)
 
-    # Get list from registry
-    registry = get_registry()
-    all_entities = registry.list_entities(context)
+    # Get list from MetadataProvider
+    entities = await context.metadata_provider.list_entities(
+        context.namespace,
+        context,
+    )
 
-    # Filter by namespace if specified
-    if namespace:
-        prefix = f'{namespace}:'
-        return [e for e in all_entities if e.startswith(prefix)]
+    # Format with namespace prefix (if not default)
+    default_ns = get_default_namespace()
+    if context.namespace != default_ns:
+        return [f'{context.namespace}:{e}' for e in entities]
 
-    return all_entities
+    return entities
 
 
 async def uma_select(
     jsql: dict,
     params: dict | None = None,
-    user_context: Any = None,  # noqa: ANN401
+    user_context: Any = None,
     namespace: str | None = None,
 ) -> dict:
     """
@@ -344,16 +387,22 @@ async def uma_select(
     """
     from namerec.uma.jsql.executor import JSQLExecutor
 
-    context = _create_context(user_context)
-
     # Extract entity_name from JSQL
     entity_name = jsql.get('from')
     if not entity_name:
         msg = "JSQL must contain 'from' field"
         raise ValueError(msg)
 
+    # Parse entity name to extract namespace
+    entity = parse_entity_name(entity_name)
+    if namespace and not entity.namespace:
+        entity = EntityName(entity=entity.entity, namespace=namespace)
+
+    # Create context for namespace
+    context = _create_context(entity.namespace, user_context)
+
     # Check access
-    _check_access(entity_name, Operation.SELECT, context)
+    _check_access(str(entity), Operation.SELECT, context)
 
     # Execute JSQL query
     executor = JSQLExecutor(context)

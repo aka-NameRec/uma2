@@ -1,36 +1,29 @@
 """JSQL parser - converts JSQL (JSON-SQL) to SQLAlchemy queries."""
 
+from collections.abc import Callable
 from typing import Any
-from typing import Callable
 
 from sqlalchemy import Column
 from sqlalchemy import Select
 from sqlalchemy import and_
 from sqlalchemy import bindparam
-from sqlalchemy import case
-from sqlalchemy import cast
 from sqlalchemy import exists
-from sqlalchemy import false
 from sqlalchemy import func
 from sqlalchemy import literal
 from sqlalchemy import not_
 from sqlalchemy import or_
 from sqlalchemy import select
-from sqlalchemy import true
-from sqlalchemy import type_coerce
 from sqlalchemy.sql import ColumnElement
-from sqlalchemy.sql import Join
 from sqlalchemy.sql.expression import ClauseElement
-from sqlalchemy.sql.expression import over
 
 from namerec.uma.core.context import UMAContext
+from namerec.uma.core.types import EntityName
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.jsql.constants import ARITHMETIC_OPERATORS
 from namerec.uma.jsql.constants import COMPARISON_OPERATORS
+from namerec.uma.jsql.constants import JoinType
 from namerec.uma.jsql.constants import JSQLField
 from namerec.uma.jsql.constants import JSQLOperator
-from namerec.uma.jsql.constants import JoinType
-from namerec.uma.jsql.constants import LOGICAL_OPERATORS
 from namerec.uma.jsql.constants import OrderDirection
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
 from namerec.uma.jsql.types import JSQLExpression
@@ -54,7 +47,7 @@ class JSQLParser:
         self.ctes: dict[str, Select] = {}  # CTEs by name
         self.table_aliases: dict[str, Any] = {}  # Table aliases for joins
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
-        
+
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
             JSQLOperator.AND: self._handle_and,
@@ -191,43 +184,65 @@ class JSQLParser:
         for additional_alias in additional_aliases:
             self.table_aliases[additional_alias] = table
 
-    async def _build_from(self, from_spec: str | dict[str, Any]) -> Any:
+    async def _build_from(self, from_spec: str) -> Any:
         """
         Build FROM clause.
 
         Args:
-            from_spec: Table name or subquery specification
+            from_spec: Table name (string)
 
         Returns:
             SQLAlchemy table or CTE reference
 
         Raises:
-            JSQLSyntaxError: If FROM syntax is invalid
+            JSQLSyntaxError: If FROM syntax is invalid or table not found
         """
-        # Simple table name
-        if isinstance(from_spec, str):
-            # Check if it's a CTE
-            if from_spec in self.ctes:
-                cte = self.ctes[from_spec]
-                self._register_table_alias(from_spec, cte)
-                return cte
-
-            # Regular table
-            entity_name = parse_entity_name(from_spec)
-            if entity_name.entity not in self.context.metadata.tables:
-                raise JSQLSyntaxError(f'Table "{from_spec}" not found')
-
-            table = self.context.metadata.tables[entity_name.entity]
-            # Register both by entity name and by from_spec (they might differ with namespace)
-            self._register_table_alias(
-                entity_name.entity,
-                table,
-                *([] if from_spec == entity_name.entity else [from_spec])
+        if not isinstance(from_spec, str):
+            raise JSQLSyntaxError(
+                f'FROM clause must be a string (table name), got {type(from_spec).__name__}. '
+                'Subqueries and complex FROM specifications are not yet supported.'
             )
-            return table
 
-        # Subquery (not implemented in this version)
-        raise JSQLSyntaxError('Subqueries in FROM clause not yet supported')
+        # Check if it's a CTE
+        if from_spec in self.ctes:
+            cte = self.ctes[from_spec]
+            self._register_table_alias(from_spec, cte)
+            return cte
+
+        # Regular table
+        entity_name = parse_entity_name(from_spec)
+
+        # Note: Table should be preloaded in executor before parsing
+        # This ensures lazy loading happens before synchronous parsing
+        table = await self._get_table_async(entity_name)
+
+        # Register both by entity name and by from_spec (they might differ with namespace)
+        self._register_table_alias(
+            entity_name.entity,
+            table,
+            *([] if from_spec == entity_name.entity else [from_spec])
+        )
+        return table
+
+    async def _get_table_async(self, entity_name: EntityName) -> Any:
+        """
+        Get table via metadata provider (lazy loading).
+
+        Args:
+            entity_name: Entity name
+
+        Returns:
+            SQLAlchemy Table object
+
+        Raises:
+            JSQLSyntaxError: If table not found
+        """
+        from namerec.uma.core.utils import get_table
+
+        try:
+            return await get_table(self.context, entity_name)
+        except Exception as e:
+            raise JSQLSyntaxError(f'Table "{entity_name}" not found: {e}') from e
 
     def _apply_alias(self, expression: ColumnElement, alias_name: str | None) -> ColumnElement:
         """
@@ -354,13 +369,16 @@ class JSQLParser:
                 if hasattr(cte, 'columns') and column_name in cte.columns:
                     return cte.columns[column_name]
 
-            # Check metadata tables
-            if table_name in self.context.metadata.tables:
-                table = self.context.metadata.tables[table_name]
+            # Load table via metadata provider (lazy loading)
+            entity_name = parse_entity_name(table_name)
+            try:
+                table = await self._get_table_async(entity_name)
                 if column_name in table.columns:
                     return table.columns[column_name]
+            except Exception as e:
+                raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
 
-            raise JSQLSyntaxError(f'Column "{field_spec}" not found')
+            raise JSQLSyntaxError(f'Column "{column_name}" not found in table "{table_name}"')
 
         # Unqualified column - search in registered tables/CTEs
         # First try table aliases
@@ -419,10 +437,13 @@ class JSQLParser:
             # Check if it's a CTE or regular table
             if table_name in self.ctes:
                 table = self.ctes[table_name]
-            elif table_name in self.context.metadata.tables:
-                table = self.context.metadata.tables[table_name]
             else:
-                raise JSQLSyntaxError(f'Table "{table_name}" not found', path)
+                # Load table via metadata provider (lazy loading)
+                entity_name = parse_entity_name(table_name)
+                try:
+                    table = await self._get_table_async(entity_name)
+                except Exception as e:
+                    raise JSQLSyntaxError(f'Table "{table_name}" not found: {e}', path) from e
 
             # Handle alias
             if alias_name := join_spec.get(JSQLField.ALIAS.value):
@@ -484,7 +505,7 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.LEFT.value}" field')
         if JSQLField.RIGHT.value not in condition_spec:
             raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
-        
+
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
         right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
 
@@ -511,7 +532,7 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{JSQLOperator.IN.value} operator must have "{JSQLField.LEFT.value}" field')
         if JSQLField.RIGHT.value not in condition_spec:
             raise JSQLSyntaxError(f'{JSQLOperator.IN.value} operator must have "{JSQLField.RIGHT.value}" field')
-        
+
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
         right_spec = condition_spec[JSQLField.RIGHT.value]
 
@@ -555,7 +576,7 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{JSQLOperator.LIKE.value} operator must have "{JSQLField.LEFT.value}" field')
         if JSQLField.RIGHT.value not in condition_spec:
             raise JSQLSyntaxError(f'{JSQLOperator.LIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
-        
+
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
         right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
         return left.like(right)
@@ -577,7 +598,7 @@ class JSQLParser:
             raise JSQLSyntaxError(f'Condition must have "{JSQLField.OP.value}" field')
 
         op_str = condition_spec[JSQLField.OP.value].upper()
-        
+
         # Try to convert to JSQLOperator enum
         try:
             op = JSQLOperator(op_str)
@@ -628,7 +649,7 @@ class JSQLParser:
         # Operator expression
         if JSQLField.OP.value in expr_spec:
             op_str = expr_spec[JSQLField.OP.value].upper()
-            
+
             # Try to convert to JSQLOperator enum
             try:
                 op = JSQLOperator(op_str)
@@ -643,7 +664,7 @@ class JSQLParser:
                     raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.LEFT.value}" field')
                 if JSQLField.RIGHT.value not in expr_spec:
                     raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
-                
+
                 left = await self._build_expression(expr_spec[JSQLField.LEFT.value])
                 right = await self._build_expression(expr_spec[JSQLField.RIGHT.value])
 

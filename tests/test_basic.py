@@ -29,7 +29,7 @@ async def test_get_handler_for_table(context: UMAContext) -> None:
     registry = get_global_registry()
     entity_name = parse_entity_name('users')
 
-    handler = registry.get_handler(entity_name, context)
+    handler = await registry.get_handler(entity_name, context)
     assert handler is not None
 
 
@@ -39,10 +39,10 @@ async def test_get_metadata_for_table(context: UMAContext) -> None:
     registry = get_global_registry()
     entity_name = parse_entity_name('users')
 
-    handler = registry.get_handler(entity_name, context)
+    handler = await registry.get_handler(entity_name, context)
     metadata = await handler.meta(entity_name, context)
 
-    assert metadata['name'] == 'users'
+    assert metadata['name'] == 'test:users'
     assert len(metadata['columns']) == 3
     assert {col['name'] for col in metadata['columns']} == {'id', 'name', 'email'}
 
@@ -50,7 +50,8 @@ async def test_get_metadata_for_table(context: UMAContext) -> None:
 @pytest.mark.asyncio
 async def test_list_entities(context: UMAContext) -> None:
     """Test listing all entities."""
-    registry = get_global_registry()
-    entities = registry.list_entities(context)
+    # Now list_entities returns registered custom handlers only
+    # To list DB entities, use metadata_provider
+    entities = await context.metadata_provider.list_entities('test', context)
 
     assert 'users' in entities

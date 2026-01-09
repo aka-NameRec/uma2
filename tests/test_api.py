@@ -2,28 +2,48 @@
 
 import pytest
 
+from namerec.uma import DefaultMetadataProvider
+from namerec.uma import NamespaceConfig
 from namerec.uma import UMAAccessDeniedError
 from namerec.uma import UMAContext
 from namerec.uma import UMANotFoundError
-from namerec.uma import initialize_uma
 from namerec.uma import uma_delete
+from namerec.uma import uma_initialize
 from namerec.uma import uma_list_entities
 from namerec.uma import uma_meta
 from namerec.uma import uma_read
 from namerec.uma import uma_save
 
 
+async def _initialize_test_uma(engine, metadata):  # noqa: ANN001, ANN202
+    """Helper to initialize UMA for tests."""
+    # Create tables first
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+    
+    # Initialize UMA
+    metadata_provider = DefaultMetadataProvider()
+    uma_initialize({
+        'test': NamespaceConfig(
+            engine=engine,
+            metadata_provider=metadata_provider,
+        ),
+    })
+    
+    # Preload metadata
+    await metadata_provider.preload(engine, namespace='test')
+
+
 @pytest.mark.asyncio
 async def test_initialize_uma(engine, metadata) -> None:  # noqa: ANN001
     """Test UMA initialization."""
-    registry = initialize_uma(engine=engine, metadata=metadata)
-    assert registry is not None
+    await _initialize_test_uma(engine, metadata)
 
 
 @pytest.mark.asyncio
 async def test_uma_list_entities(engine, metadata) -> None:  # noqa: ANN001
     """Test listing entities."""
-    initialize_uma(engine=engine, metadata=metadata)
+    await _initialize_test_uma(engine, metadata)
 
     entities = await uma_list_entities()
     assert 'users' in entities
@@ -32,17 +52,17 @@ async def test_uma_list_entities(engine, metadata) -> None:  # noqa: ANN001
 @pytest.mark.asyncio
 async def test_uma_meta(engine, metadata) -> None:  # noqa: ANN001
     """Test getting entity metadata."""
-    initialize_uma(engine=engine, metadata=metadata)
+    await _initialize_test_uma(engine, metadata)
 
     meta = await uma_meta('users')
-    assert meta['name'] == 'users'
+    assert meta['name'] == 'test:users'
     assert len(meta['columns']) == 3
 
 
 @pytest.mark.asyncio
 async def test_uma_save_and_read(engine, metadata) -> None:  # noqa: ANN001
     """Test creating and reading a record."""
-    initialize_uma(engine=engine, metadata=metadata)
+    await _initialize_test_uma(engine, metadata)
 
     # Create
     user_id = await uma_save('users', {'name': 'Test User', 'email': 'test@example.com'})
@@ -57,7 +77,7 @@ async def test_uma_save_and_read(engine, metadata) -> None:  # noqa: ANN001
 @pytest.mark.asyncio
 async def test_uma_update(engine, metadata) -> None:  # noqa: ANN001
     """Test updating a record."""
-    initialize_uma(engine=engine, metadata=metadata)
+    await _initialize_test_uma(engine, metadata)
 
     # Create
     user_id = await uma_save('users', {'name': 'Test User', 'email': 'test@example.com'})
@@ -73,7 +93,7 @@ async def test_uma_update(engine, metadata) -> None:  # noqa: ANN001
 @pytest.mark.asyncio
 async def test_uma_delete(engine, metadata) -> None:  # noqa: ANN001
     """Test deleting a record."""
-    initialize_uma(engine=engine, metadata=metadata)
+    await _initialize_test_uma(engine, metadata)
 
     # Create
     user_id = await uma_save('users', {'name': 'Test User', 'email': 'test@example.com'})

@@ -10,12 +10,12 @@ from namerec.uma.jsql.types import JSQLQuery
 from namerec.uma.jsql.types import QueryResult
 
 __all__ = [
+    'ColumnMetadata',
+    'JSQLExecutionError',
     'JSQLExecutor',
     'JSQLParser',
-    'JSQLResultBuilder',
     'JSQLQuery',
-    'ColumnMetadata',
-    'QueryResult',
+    'JSQLResultBuilder',
     'JSQLSyntaxError',
-    'JSQLExecutionError',
+    'QueryResult',
 ]
