@@ -1,11 +1,17 @@
 """UMA context for operation execution."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from dataclasses import field
+from typing import TYPE_CHECKING
 from typing import Any
 
 from sqlalchemy import Engine
 from sqlalchemy import MetaData
+
+if TYPE_CHECKING:
+    from namerec.uma.core.types import MetadataProvider
 
 
 @dataclass
@@ -18,7 +24,7 @@ class UMAContext:
     """
 
     engine: Engine
-    metadata_provider: Any  # MetadataProvider, but avoid circular import
+    metadata_provider: 'MetadataProvider'
     namespace: str
     user_context: Any = None  # User-defined context for access control
     cache: Any = None  # Optional cache implementation

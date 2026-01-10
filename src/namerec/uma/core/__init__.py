@@ -10,6 +10,7 @@ from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
 from namerec.uma.core.types import MetadataProvider
 from namerec.uma.core.types import Operation
+from namerec.uma.core.types import UMAContextSpec
 from namerec.uma.core.utils import copy_field_meta
 from namerec.uma.core.utils import form_entity_name
 from namerec.uma.core.utils import is_virtual_view
@@ -22,6 +23,7 @@ __all__ = [
     'Operation',
     'UMAAccessDeniedError',
     'UMAContext',
+    'UMAContextSpec',
     'UMAError',
     'UMANotFoundError',
     'UMANotImplementedError',

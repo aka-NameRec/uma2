@@ -7,6 +7,7 @@ from typing import Protocol
 from typing import runtime_checkable
 
 from sqlalchemy import Engine
+from sqlalchemy import MetaData
 from sqlalchemy import Select
 from sqlalchemy import Table
 
@@ -47,6 +48,32 @@ class EntityName:
 
 
 @runtime_checkable
+class UMAContextSpec(Protocol):
+    """
+    Protocol specification for UMA execution context.
+
+    Defines the minimal interface required by MetadataProvider and EntityHandler.
+    This protocol eliminates circular dependencies between context and protocol definitions.
+    """
+
+    engine: Engine
+    metadata_provider: 'MetadataProvider'
+    namespace: str
+    user_context: Any
+    cache: Any
+    extra: dict[str, Any]
+
+    @property
+    def metadata(self) -> MetaData:
+        """Get cached metadata for namespace (sync access for JSQL parser)."""
+        ...
+
+    def _set_metadata(self, metadata: MetaData) -> None:
+        """Set cached metadata (internal use only)."""
+        ...
+
+
+@runtime_checkable
 class EntityHandler(Protocol):
     """
     Protocol for entity handlers.
@@ -58,7 +85,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         params: dict[str, Any],
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> Select:
         """
         Return SQLAlchemy Select for data selection.
@@ -78,7 +105,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         id_value: Any,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> dict:
         """
         Read a single record by id.
@@ -102,7 +129,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         data: dict,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> Any:
         """
         Save a record (create if id=None, otherwise update).
@@ -122,7 +149,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         id_value: Any,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> bool:
         """
         Delete a record by id.
@@ -144,7 +171,7 @@ class EntityHandler(Protocol):
     async def meta(
         cls,
         entity_name: EntityName,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> dict:
         """
         Return entity metadata.
@@ -174,7 +201,7 @@ class MetadataProvider(Protocol):
     async def get_metadata(
         self,
         entity_name: EntityName,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> dict:
         """
         Get metadata for an entity.
@@ -191,7 +218,7 @@ class MetadataProvider(Protocol):
     async def list_entities(
         self,
         namespace: str,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> list[str]:
         """
         List all entities in namespace.
@@ -212,7 +239,7 @@ class MetadataProvider(Protocol):
     async def entity_exists(
         self,
         entity_name: EntityName,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> bool:
         """
         Check if entity exists in namespace.
@@ -234,7 +261,7 @@ class MetadataProvider(Protocol):
         self,
         entity_name: EntityName,
         engine: Engine,
-        context: 'UMAContext | None' = None,
+        context: UMAContextSpec | None = None,
     ) -> Table:
         """
         Get SQLAlchemy Table object for entity (lazy loading).
@@ -267,7 +294,3 @@ class MetadataProvider(Protocol):
             namespace: Namespace to preload (default: 'default')
         """
         ...
-
-
-# Forward declaration for type checking
-from namerec.uma.core.context import UMAContext  # noqa: E402
