@@ -73,7 +73,7 @@ class JSQLExecutor:
                 original_error=e,
             ) from e
 
-    def _compile_query_to_sql(self, query: Any) -> str:  # noqa: ANN401
+    def _compile_query_to_sql(self, query: Any) -> str:
         """
         Compile SQLAlchemy query to SQL string.
 

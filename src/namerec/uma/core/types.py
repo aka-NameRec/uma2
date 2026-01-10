@@ -6,7 +6,10 @@ from typing import Any
 from typing import Protocol
 from typing import runtime_checkable
 
+from sqlalchemy import Engine
+from sqlalchemy import MetaData
 from sqlalchemy import Select
+from sqlalchemy import Table
 
 
 class Operation(str, Enum):
@@ -45,6 +48,32 @@ class EntityName:
 
 
 @runtime_checkable
+class UMAContextSpec(Protocol):
+    """
+    Protocol specification for UMA execution context.
+
+    Defines the minimal interface required by MetadataProvider and EntityHandler.
+    This protocol eliminates circular dependencies between context and protocol definitions.
+    """
+
+    engine: Engine
+    metadata_provider: 'MetadataProvider'
+    namespace: str
+    user_context: Any
+    cache: Any
+    extra: dict[str, Any]
+
+    @property
+    def metadata(self) -> MetaData:
+        """Get cached metadata for namespace (sync access for JSQL parser)."""
+        ...
+
+    def _set_metadata(self, metadata: MetaData) -> None:
+        """Set cached metadata (internal use only)."""
+        ...
+
+
+@runtime_checkable
 class EntityHandler(Protocol):
     """
     Protocol for entity handlers.
@@ -56,7 +85,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         params: dict[str, Any],
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> Select:
         """
         Return SQLAlchemy Select for data selection.
@@ -76,7 +105,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         id_value: Any,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> dict:
         """
         Read a single record by id.
@@ -100,7 +129,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         data: dict,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> Any:
         """
         Save a record (create if id=None, otherwise update).
@@ -120,7 +149,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         id_value: Any,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> bool:
         """
         Delete a record by id.
@@ -142,7 +171,7 @@ class EntityHandler(Protocol):
     async def meta(
         cls,
         entity_name: EntityName,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> dict:
         """
         Return entity metadata.
@@ -159,12 +188,20 @@ class EntityHandler(Protocol):
 
 @runtime_checkable
 class MetadataProvider(Protocol):
-    """Protocol for metadata providers."""
+    """
+    Protocol for metadata providers.
+
+    Metadata providers are responsible for:
+    - Lazy loading of database schema (via reflect())
+    - Listing entities in a namespace
+    - Checking entity existence
+    - Providing entity metadata
+    """
 
     async def get_metadata(
         self,
         entity_name: EntityName,
-        context: 'UMAContext',
+        context: UMAContextSpec,
     ) -> dict:
         """
         Get metadata for an entity.
@@ -178,6 +215,82 @@ class MetadataProvider(Protocol):
         """
         ...
 
+    async def list_entities(
+        self,
+        namespace: str,
+        context: UMAContextSpec,
+    ) -> list[str]:
+        """
+        List all entities in namespace.
 
-# Forward declaration for type checking
-from namerec.uma.core.context import UMAContext  # noqa: E402, F401
+        Args:
+            namespace: Namespace name
+            context: Execution context
+
+        Returns:
+            List of entity names (without namespace prefix)
+
+        Raises:
+            ValueError: If namespace not found
+            ConnectionError: If cannot connect to database
+        """
+        ...
+
+    async def entity_exists(
+        self,
+        entity_name: EntityName,
+        context: UMAContextSpec,
+    ) -> bool:
+        """
+        Check if entity exists in namespace.
+
+        Args:
+            entity_name: Entity name
+            context: Execution context
+
+        Returns:
+            True if entity exists, False otherwise
+
+        Raises:
+            ValueError: If namespace not found
+            ConnectionError: If cannot connect to database
+        """
+        ...
+
+    async def get_table(
+        self,
+        entity_name: EntityName,
+        engine: Engine,
+        context: UMAContextSpec | None = None,
+    ) -> Table:
+        """
+        Get SQLAlchemy Table object for entity (lazy loading).
+
+        Performs reflect() if needed and caches result.
+
+        Args:
+            entity_name: Entity name
+            engine: SQLAlchemy Engine for the namespace
+            context: Optional UMAContext to cache metadata in
+
+        Returns:
+            SQLAlchemy Table object
+
+        Raises:
+            UMANotFoundError: If table not found
+            RuntimeError: If reflection fails
+        """
+        ...
+
+    async def preload(self, engine: Engine, namespace: str = 'default') -> None:
+        """
+        Preload metadata (optional, for production).
+
+        Call after uma_initialize() to avoid first-request latency.
+        This method is optional and may be a no-op for some providers.
+
+        Args:
+            engine: SQLAlchemy Engine for the namespace
+            namespace: Namespace to preload (default: 'default')
+        """
+        ...

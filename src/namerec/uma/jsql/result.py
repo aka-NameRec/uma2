@@ -17,7 +17,7 @@ class JSQLResultBuilder:
     """
 
     @staticmethod
-    def build_result(result: CursorResult, query: Any, debug_sql: str | None = None) -> QueryResult:  # noqa: ANN401
+    def build_result(result: CursorResult, query: Any, debug_sql: str | None = None) -> QueryResult:
         """
         Build QueryResult from SQLAlchemy result.
 
@@ -39,7 +39,7 @@ class JSQLResultBuilder:
         return QueryResult(meta=meta, data=data, debug=debug_sql)
 
     @staticmethod
-    def _extract_metadata(result: CursorResult, query: Any) -> list[ColumnMetadata]:  # noqa: ANN401
+    def _extract_metadata(result: CursorResult, query: Any) -> list[ColumnMetadata]:
         """
         Extract column metadata from query and result.
 
@@ -75,7 +75,7 @@ class JSQLResultBuilder:
         return meta
 
     @staticmethod
-    def _build_column_metadata(column_key: str, query_column: Any) -> ColumnMetadata:  # noqa: ANN401
+    def _build_column_metadata(column_key: str, query_column: Any) -> ColumnMetadata:
         """
         Build metadata for a single column.
 

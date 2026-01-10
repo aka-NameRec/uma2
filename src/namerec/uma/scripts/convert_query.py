@@ -3,10 +3,9 @@
 
 import json
 import sys
-from typing import Optional
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 from namerec.uma.jsql.converter import jsql_to_sql
 from namerec.uma.jsql.converter import sql_to_jsql
@@ -18,7 +17,7 @@ app = typer.Typer(help='Convert between SQL and JSQL formats with automatic form
 @app.command()
 def convert(
     input_file: Annotated[
-        Optional[typer.FileText],
+        typer.FileText | None,
         typer.Argument(help='Input file (defaults to stdin)'),
     ] = None,
     dialect: Annotated[
@@ -30,7 +29,7 @@ def convert(
         typer.Option('--pretty/--no-pretty', help='Pretty print output'),
     ] = True,
     output_format: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             '--format',
             '-f',

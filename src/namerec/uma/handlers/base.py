@@ -12,6 +12,7 @@ from sqlalchemy import update
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.types import EntityName
+from namerec.uma.core.utils import get_table
 
 
 class DefaultEntityHandler:
@@ -38,7 +39,7 @@ class DefaultEntityHandler:
         Returns:
             SQLAlchemy Select object
         """
-        table = context.metadata.tables[entity_name.entity]
+        table = await get_table(context, entity_name)
         return select(table)
 
     @classmethod
@@ -67,7 +68,7 @@ class DefaultEntityHandler:
         query = await cls.select(entity_name, {}, context)
 
         # Add condition by id
-        table = context.metadata.tables[entity_name.entity]
+        table = await get_table(context, entity_name)
         pk_columns = list(table.primary_key.columns)
 
         if len(pk_columns) == 1:
@@ -108,7 +109,7 @@ class DefaultEntityHandler:
         Returns:
             ID of saved record
         """
-        table = context.metadata.tables[entity_name.entity]
+        table = await get_table(context, entity_name)
         pk_columns = list(table.primary_key.columns)
 
         # Determine create vs update
@@ -165,7 +166,7 @@ class DefaultEntityHandler:
         # Check access through read (DRY)
         await cls._ensure_exists(entity_name, id_value, context)
 
-        table = context.metadata.tables[entity_name.entity]
+        table = await get_table(context, entity_name)
         pk_columns = list(table.primary_key.columns)
         pk_condition = cls._build_pk_condition(pk_columns, id_value)
 
@@ -190,7 +191,7 @@ class DefaultEntityHandler:
         Returns:
             Metadata dictionary
         """
-        table = context.metadata.tables[entity_name.entity]
+        table = await get_table(context, entity_name)
 
         columns = []
         for col in table.columns:
@@ -209,8 +210,15 @@ class DefaultEntityHandler:
 
             columns.append(col_info)
 
+        # Construct name with namespace
+        if entity_name.namespace:
+            name = str(entity_name)
+        else:
+            # Entity parsed without namespace - use context's namespace
+            name = f'{context.namespace}:{entity_name.entity}'
+
         metadata = {
-            'name': str(entity_name),
+            'name': name,
             'description': '',
             'columns': columns,
         }
@@ -252,7 +260,7 @@ class DefaultEntityHandler:
         return await cls.read(entity_name, id_value, context)
 
     @staticmethod
-    def _build_pk_condition(pk_columns: list, id_value: Any) -> Any:  # noqa: ANN401
+    def _build_pk_condition(pk_columns: list, id_value: Any) -> Any:
         """
         Build WHERE condition for primary key.
         Supports simple and composite keys.

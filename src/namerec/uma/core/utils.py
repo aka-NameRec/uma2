@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from sqlalchemy import Table
+
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.types import EntityName
 
@@ -71,10 +73,10 @@ async def copy_field_meta(
         source_entity = parse_entity_name(source_entity)
 
     # Import here to avoid circular dependency
-    from namerec.uma.registry import get_global_registry
+    from namerec.uma.api import get_registry
 
-    registry = get_global_registry()
-    handler = registry.get_handler(source_entity, context)
+    registry = get_registry()
+    handler = await registry.get_handler(source_entity, context)
 
     # Get metadata
     source_meta = await handler.meta(source_entity, context)
@@ -102,3 +104,33 @@ def is_virtual_view(metadata: dict) -> bool:
         True if is_virtual_view is present and True
     """
     return metadata.get('is_virtual_view', False) is True
+
+
+async def get_table(
+    context: UMAContext,
+    entity_name: EntityName | str,
+) -> Table:
+    """
+    Helper to get SQLAlchemy Table from context.
+
+    Provides shorter syntax than context.metadata_provider.get_table(...).
+
+    Args:
+        context: UMA context
+        entity_name: Entity name (string or EntityName)
+
+    Returns:
+        SQLAlchemy Table object
+
+    Raises:
+        UMANotFoundError: If table not found
+        RuntimeError: If reflection fails
+    """
+    if isinstance(entity_name, str):
+        entity_name = parse_entity_name(entity_name)
+
+    return await context.metadata_provider.get_table(
+        entity_name,
+        context.engine,
+        context,
+    )
