@@ -8,9 +8,9 @@ from namerec.uma import UMAAccessDeniedError
 from namerec.uma import UMAContext
 from namerec.uma import UMANotFoundError
 from namerec.uma import uma_delete
+from namerec.uma import uma_entity_details
+from namerec.uma import uma_entity_list
 from namerec.uma import uma_initialize
-from namerec.uma import uma_list_entities
-from namerec.uma import uma_meta
 from namerec.uma import uma_read
 from namerec.uma import uma_save
 
@@ -41,20 +41,20 @@ async def test_initialize_uma(engine, metadata) -> None:  # noqa: ANN001
 
 
 @pytest.mark.asyncio
-async def test_uma_list_entities(engine, metadata) -> None:  # noqa: ANN001
+async def test_uma_entity_list(engine, metadata) -> None:  # noqa: ANN001
     """Test listing entities."""
     await _initialize_test_uma(engine, metadata)
 
-    entities = await uma_list_entities()
+    entities = await uma_entity_list()
     assert 'users' in entities
 
 
 @pytest.mark.asyncio
-async def test_uma_meta(engine, metadata) -> None:  # noqa: ANN001
+async def test_uma_entity_details(engine, metadata) -> None:  # noqa: ANN001
     """Test getting entity metadata."""
     await _initialize_test_uma(engine, metadata)
 
-    meta = await uma_meta('users')
+    meta = await uma_entity_details('users')
     assert meta['name'] == 'test:users'
     assert len(meta['columns']) == 3
 

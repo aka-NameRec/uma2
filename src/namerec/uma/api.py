@@ -284,7 +284,7 @@ async def uma_delete(
     return await handler.delete(entity, id_value, context)
 
 
-async def uma_meta(
+async def uma_entity_details(
     entity_name: str,
     user_context: Any = None,
     namespace: str | None = None,
@@ -321,7 +321,7 @@ async def uma_meta(
     return await handler.meta(entity, context)
 
 
-async def uma_list_entities(
+async def uma_entity_list(
     user_context: Any = None,
     namespace: str | None = None,
 ) -> list[str]:

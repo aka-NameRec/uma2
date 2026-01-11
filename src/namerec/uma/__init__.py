@@ -8,8 +8,8 @@ from namerec.uma.api import get_registry
 from namerec.uma.api import initialize_uma
 from namerec.uma.api import uma_delete
 from namerec.uma.api import uma_initialize
-from namerec.uma.api import uma_list_entities
-from namerec.uma.api import uma_meta
+from namerec.uma.api import uma_entity_details
+from namerec.uma.api import uma_entity_list
 from namerec.uma.api import uma_read
 from namerec.uma.api import uma_save
 from namerec.uma.api import uma_select
@@ -77,6 +77,6 @@ __all__ = [
     'uma_read',
     'uma_save',
     'uma_delete',
-    'uma_meta',
-    'uma_list_entities',
+    'uma_entity_details',
+    'uma_entity_list',
 ]
