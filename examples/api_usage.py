@@ -32,8 +32,8 @@ from namerec.uma import copy_field_meta
 from namerec.uma import get_registry
 from namerec.uma import initialize_uma
 from namerec.uma import uma_delete
-from namerec.uma import uma_list_entities
-from namerec.uma import uma_meta
+from namerec.uma import uma_entity_details
+from namerec.uma import uma_entity_list
 from namerec.uma import uma_read
 from namerec.uma import uma_save
 
@@ -201,7 +201,7 @@ async def main() -> None:
     admin_user = User(user_id=1, role='admin')
 
     try:
-        entities = await uma_list_entities(user_context=admin_user)
+        entities = await uma_entity_list(user_context=admin_user)
         print(f'✓ Available entities: {entities}')
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
@@ -210,7 +210,7 @@ async def main() -> None:
     print('\n=== Example 2: Get metadata (admin) ===')
 
     try:
-        user_meta = await uma_meta('users', user_context=admin_user)
+        user_meta = await uma_entity_details('users', user_context=admin_user)
         print(f"✓ Users table columns: {[col['name'] for col in user_meta['columns']]}")
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
