@@ -29,4 +29,4 @@ class SelectResponse(BaseModel):
     """Response for select endpoint."""
 
     meta: list[dict[str, Any]]
-    data: list[dict[str, Any]]
+    data: list[list[Any]]

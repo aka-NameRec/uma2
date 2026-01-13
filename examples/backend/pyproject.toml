@@ -10,8 +10,14 @@ dependencies = [
     "structlog>=23.2.0",
     "asyncpg>=0.29.0",
     "dependency-injector>=4.41.0",
-    "namerec-uma @ git+https://github.com/aka-NameRec/uma2.git",
+    "namerec-uma",
 ]
+
+[tool.uv.sources]
+namerec-uma = { path = "../..", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [build-system]
 requires = ["hatchling"]

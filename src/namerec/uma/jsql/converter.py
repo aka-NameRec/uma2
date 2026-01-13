@@ -145,9 +145,16 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
         # Add ORDER BY
         if order_by := jsql.get('order_by'):
             for order_spec in order_by:
-                order_expr = _jsql_expression_to_sqlglot(order_spec.get('field') or order_spec)
-                if order_expr:
+                # Handle both string and dict formats
+                if isinstance(order_spec, dict):
+                    order_expr = _jsql_expression_to_sqlglot(order_spec.get('field') or order_spec)
                     direction = order_spec.get('direction', OrderDirection.ASC.value).upper()
+                else:
+                    # If order_spec is a string, use it directly
+                    order_expr = _jsql_expression_to_sqlglot(order_spec)
+                    direction = OrderDirection.ASC.value.upper()
+                
+                if order_expr:
                     desc = direction == OrderDirection.DESC.value.upper()
                     query = query.order_by(order_expr, desc=desc)
 
@@ -193,7 +200,8 @@ def _jsql_select_to_sqlglot(select_spec: list[dict[str, Any]] | None) -> list[ex
     for field_spec in select_spec:
         field_expr = _jsql_expression_to_sqlglot(field_spec)
         if field_expr:
-            alias = field_spec.get('alias')
+            # Check if field_spec is a dict before trying to get 'alias'
+            alias = field_spec.get('alias') if isinstance(field_spec, dict) else None
             if alias:
                 field_expr = exp.alias_(field_expr, alias)
             result.append(field_expr)
@@ -441,23 +449,42 @@ def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expr
     """
     Convert comparison operator to sqlglot expression.
     
+    Supports both old and new JSQL formats:
+    - Old: {"op": ">=", "field": "created", "value": "2025-12-18"}
+    - New: {"op": ">=", "left": {"field": "created"}, "right": {"value": "2025-12-18"}}
+    - BETWEEN: {"op": "BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
+    
     Raises:
         MissingFieldError: If required field is missing
         UnknownOperatorError: If operator is not supported
     """
     logger.debug(f'Converting comparison operator: {op}')
 
-    # Get left side (field)
-    if 'field' not in cond_spec:
-        raise MissingFieldError('field', path='field', context='comparison operation')
+    # Handle BETWEEN first, as it has different structure
+    if op == JSQLOperator.BETWEEN.value:
+        if 'expr' not in cond_spec:
+            raise MissingFieldError('expr', path='expr', context='BETWEEN operator')
+        if 'low' not in cond_spec:
+            raise MissingFieldError('low', path='low', context='BETWEEN operator')
+        if 'high' not in cond_spec:
+            raise MissingFieldError('high', path='high', context='BETWEEN operator')
+        
+        expr = _jsql_expression_to_sqlglot(cond_spec['expr'])
+        low_expr = _jsql_expression_to_sqlglot(cond_spec['low'])
+        high_expr = _jsql_expression_to_sqlglot(cond_spec['high'])
+        
+        logger.debug('Processing BETWEEN operator')
+        return exp.Between(this=expr, low=low_expr, high=high_expr)
 
-    field_expr = _jsql_expression_to_sqlglot(cond_spec['field'])
-
-    # Handle standard comparison operators using mapping
-    operator_class = COMPARISON_OP_TO_SQLGLOT.get(op)
-    if operator_class:
-        # Get right side (value or field)
-        right_expr = None
+    # Check for new format (left/right) first
+    if 'left' in cond_spec and 'right' in cond_spec:
+        left_expr = _jsql_expression_to_sqlglot(cond_spec['left'])
+        right_expr = _jsql_expression_to_sqlglot(cond_spec['right'])
+    # Fall back to old format (field/value)
+    elif 'field' in cond_spec:
+        left_expr = _jsql_expression_to_sqlglot(cond_spec['field'])
+        
+        # Get right side (value or right_field)
         if 'value' in cond_spec:
             right_expr = _jsql_expression_to_sqlglot({'value': cond_spec['value']})
         elif 'right_field' in cond_spec:
@@ -468,8 +495,17 @@ def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expr
                 path='',
                 context='comparison requires right operand'
             )
+    else:
+        raise MissingFieldError(
+            'left/right or field',
+            path='',
+            context='comparison operation requires left and right operands'
+        )
 
-        return operator_class(this=field_expr, expression=right_expr)
+    # Handle standard comparison operators using mapping
+    operator_class = COMPARISON_OP_TO_SQLGLOT.get(op)
+    if operator_class:
+        return operator_class(this=left_expr, expression=right_expr)
 
     # Handle special operators
     if op == JSQLOperator.IN.value:
@@ -478,24 +514,25 @@ def _convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expr
         values = cond_spec['values']
         logger.debug(f'Processing IN operator with {len(values)} values')
         val_exprs = [_jsql_expression_to_sqlglot({'value': v}) for v in values]
-        return exp.In(this=field_expr, expressions=val_exprs)
+        return exp.In(this=left_expr, expressions=val_exprs)
 
     if op == JSQLOperator.LIKE.value:
         if 'pattern' not in cond_spec:
             raise MissingFieldError('pattern', path='pattern', context='LIKE operator')
         pattern = cond_spec['pattern']
         logger.debug(f'Processing LIKE operator with pattern: {pattern}')
-        return exp.Like(this=field_expr, expression=exp.Literal.string(pattern))
+        return exp.Like(this=left_expr, expression=exp.Literal.string(pattern))
 
     if op == JSQLOperator.IS_NULL.value:
-        return exp.Is(this=field_expr, expression=exp.Null())
+        return exp.Is(this=left_expr, expression=exp.Null())
 
     if op == JSQLOperator.IS_NOT_NULL.value:
-        return exp.Not(this=exp.Is(this=field_expr, expression=exp.Null()))
+        return exp.Not(this=exp.Is(this=left_expr, expression=exp.Null()))
 
     # Unknown operator
     supported = list(COMPARISON_OP_TO_SQLGLOT.keys()) + [
         JSQLOperator.IN.value,
+        JSQLOperator.BETWEEN.value,
         JSQLOperator.LIKE.value,
         JSQLOperator.IS_NULL.value,
         JSQLOperator.IS_NOT_NULL.value,

@@ -73,6 +73,7 @@ class JSQLOperator(str, Enum):
 
     # Special operators
     IN = 'IN'
+    BETWEEN = 'BETWEEN'
     EXISTS = 'EXISTS'
     IS_NULL = 'IS NULL'
     IS_NOT_NULL = 'IS NOT NULL'

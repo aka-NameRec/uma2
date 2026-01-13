@@ -107,7 +107,7 @@ Expressions support operators and functions:
 
 **Equivalent SQL**: `base_price + (base_price * 0.2)`
 
-**Supported operators**: `=`, `!=`, `<`, `<=`, `>`, `>=`, `+`, `-`, `*`, `/`, `%`, `AND`, `OR`, `NOT`, `IN`, `LIKE`, `IS NULL`, `IS NOT NULL`
+**Supported operators**: `=`, `!=`, `<`, `<=`, `>`, `>=`, `+`, `-`, `*`, `/`, `%`, `AND`, `OR`, `NOT`, `IN`, `BETWEEN`, `LIKE`, `IS NULL`, `IS NOT NULL`
 
 ### Functions
 
@@ -341,6 +341,57 @@ WHERE EXISTS (
     AND orders.total > 1000
 )
 ```
+
+### BETWEEN
+
+The `BETWEEN` operator provides a more compact and readable way to check if a value falls within a range.
+
+```json
+{
+  "from": "orders",
+  "select": ["id", "customer_id", "order_date", "total"],
+  "where": {
+    "op": "BETWEEN",
+    "expr": {"field": "order_date"},
+    "low": {"value": "2025-12-18"},
+    "high": {"value": "2025-12-31"}
+  }
+}
+```
+
+**Equivalent SQL**:
+```sql
+SELECT id, customer_id, order_date, total
+FROM orders
+WHERE order_date BETWEEN '2025-12-18' AND '2025-12-31'
+```
+
+**With parameters**:
+```json
+{
+  "from": "orders",
+  "select": ["id", "total"],
+  "where": {
+    "op": "BETWEEN",
+    "expr": {"field": "order_date"},
+    "low": {"param": "start_date"},
+    "high": {"param": "end_date"}
+  }
+}
+```
+
+**Note**: The `BETWEEN` operator is inclusive on both ends. It is equivalent to:
+```json
+{
+  "op": "AND",
+  "conditions": [
+    {"op": ">=", "left": {"field": "order_date"}, "right": {"value": "2025-12-18"}},
+    {"op": "<=", "left": {"field": "order_date"}, "right": {"value": "2025-12-31"}}
+  ]
+}
+```
+
+The parser automatically handles type inference from the `expr` field, ensuring proper type casting for timestamp and other data types.
 
 ### Grouping and Having
 

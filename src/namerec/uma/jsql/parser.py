@@ -7,6 +7,7 @@ from sqlalchemy import Column
 from sqlalchemy import Select
 from sqlalchemy import and_
 from sqlalchemy import bindparam
+from sqlalchemy import cast
 from sqlalchemy import exists
 from sqlalchemy import func
 from sqlalchemy import literal
@@ -54,6 +55,7 @@ class JSQLParser:
             JSQLOperator.OR: self._handle_or,
             JSQLOperator.NOT: self._handle_not,
             JSQLOperator.IN: self._handle_in,
+            JSQLOperator.BETWEEN: self._handle_between,
             JSQLOperator.EXISTS: self._handle_exists,
             JSQLOperator.IS_NULL: self._handle_is_null,
             JSQLOperator.IS_NOT_NULL: self._handle_is_not_null,
@@ -507,7 +509,9 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
 
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
+        # Extract type from left expression to use for right expression
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
 
         # Use match-case for operator dispatch
         match op:
@@ -578,8 +582,32 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{JSQLOperator.LIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
 
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
+        # Extract type from left expression to use for right expression
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
         return left.like(right)
+
+    async def _handle_between(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """
+        Handle BETWEEN operator.
+        
+        JSQL format: {"op": "BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
+        SQL equivalent: expr BETWEEN low AND high
+        """
+        if JSQLField.EXPR.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.BETWEEN.value} must have "{JSQLField.EXPR.value}" field')
+        if 'low' not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.BETWEEN.value} must have "low" field')
+        if 'high' not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.BETWEEN.value} must have "high" field')
+
+        expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
+        # Extract type from expression to use for low/high bounds
+        expr_type = getattr(expr, 'type', None) if hasattr(expr, 'type') else None
+        low = await self._build_expression(condition_spec['low'], expected_type=expr_type)
+        high = await self._build_expression(condition_spec['high'], expected_type=expr_type)
+        
+        return expr.between(low, high)
 
     async def _build_condition(self, condition_spec: JSQLExpression) -> ClauseElement:
         """
@@ -615,12 +643,17 @@ class JSQLParser:
 
         raise JSQLSyntaxError(f'Unsupported operator: {op_str}')
 
-    async def _build_expression(self, expr_spec: JSQLExpression) -> ColumnElement:
+    async def _build_expression(
+        self,
+        expr_spec: JSQLExpression,
+        expected_type: Any | None = None
+    ) -> ColumnElement:
         """
         Build expression (arithmetic, logical, etc.).
 
         Args:
             expr_spec: Expression specification
+            expected_type: Expected SQLAlchemy type for literals/parameters (optional)
 
         Returns:
             SQLAlchemy expression
@@ -634,13 +667,19 @@ class JSQLParser:
 
         # Literal value
         if (value := expr_spec.get(JSQLField.VALUE.value)) is not None:
+            if expected_type is not None:
+                # Use cast() for explicit type conversion to avoid VARCHAR casting issues
+                return cast(literal(value), expected_type)
             return literal(value)
 
         # Parameter - use walrus operator
         if param_name := expr_spec.get(JSQLField.PARAM.value):
             if param_name not in self.params:
                 raise JSQLSyntaxError(f'Parameter "{param_name}" not provided')
-            return bindparam(param_name, value=self.params[param_name])
+            # Use cast() for explicit type conversion when expected_type is available
+            if expected_type is not None:
+                return cast(literal(self.params[param_name]), expected_type)
+            return literal(self.params[param_name])
 
         # Function call
         if JSQLField.FUNC.value in expr_spec:
