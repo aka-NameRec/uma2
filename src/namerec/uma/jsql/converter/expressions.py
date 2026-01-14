@@ -1,0 +1,202 @@
+"""Expression handling for JSQL <-> SQL conversion."""
+
+import logging
+from typing import Any
+
+import sqlglot.expressions as exp
+
+from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
+from namerec.uma.jsql.conversion_exceptions import MissingFieldError
+from namerec.uma.jsql.conversion_exceptions import UnknownOperatorError
+from namerec.uma.jsql.conversion_exceptions import UnsupportedOperationError
+from namerec.uma.jsql.converter.operators import ARITHMETIC_OP_TO_SQLGLOT
+from namerec.uma.jsql.converter.operators import SQLGLOT_TO_ARITHMETIC
+from namerec.uma.jsql.types import JSQLExpression
+
+logger = logging.getLogger(__name__)
+
+
+def jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expression:
+    """
+    Convert JSQL expression to sqlglot expression.
+
+    Delegates to specialized functions based on expression type.
+
+    Raises:
+        InvalidExpressionError: If expression structure is invalid or unrecognized
+    """
+    if isinstance(expr_spec, str):
+        return convert_field_reference(expr_spec)
+
+    if isinstance(expr_spec, dict):
+        # Try each expression type in order
+        if 'field' in expr_spec:
+            return convert_field_reference(expr_spec['field'])
+        if 'value' in expr_spec:
+            return convert_literal_value(expr_spec['value'])
+        if 'func' in expr_spec:
+            return convert_function_call(expr_spec)
+        if 'op' in expr_spec:
+            return convert_arithmetic_op(expr_spec)
+
+        # If we get here, the dict doesn't match any known pattern
+        raise InvalidExpressionError(
+            message="Expression must contain one of: 'field', 'value', 'func', or 'op'",
+            path='',
+            expression=expr_spec
+        )
+
+    # If it's neither string nor dict
+    raise InvalidExpressionError(
+        message=f'Expression must be string or dict, got {type(expr_spec).__name__}',
+        path='',
+        expression={'type': type(expr_spec).__name__, 'value': repr(expr_spec)}
+    )
+
+
+def convert_field_reference(field: str) -> exp.Expression:
+    """Convert field reference to sqlglot column expression."""
+    if field == '*':
+        return exp.Star()
+    if '.' in field:
+        table, column = field.split('.', 1)
+        return exp.column(column, table=table)
+    return exp.column(field)
+
+
+def convert_literal_value(value: Any) -> exp.Expression:
+    """Convert literal value to sqlglot expression."""
+    match value:
+        case bool():
+            return exp.Boolean(this=value)
+        case int() | float():
+            return exp.Literal.number(value)
+        case _:
+            return exp.Literal.string(str(value))
+
+
+def convert_function_call(expr_spec: dict[str, Any]) -> exp.Expression:
+    """Convert function call to sqlglot expression."""
+    func = expr_spec['func']
+    logger.debug(f'Converting function call: {func}')
+
+    # Single pass: convert and filter None values in one comprehension
+    args = [
+        converted
+        for arg in expr_spec.get('args', [])
+        if (converted := jsql_expression_to_sqlglot(arg)) is not None
+    ]
+    logger.debug(f'Function {func} has {len(args)} arguments')
+
+    # Try to find specific sqlglot function class
+    func_class = getattr(exp, func.upper(), None)
+    if func_class and issubclass(func_class, exp.Func):
+        logger.debug(f'Using specific sqlglot function: {func_class.__name__}')
+        return func_class(*args)
+
+    # Fallback to generic Anonymous function
+    logger.debug(f'Using Anonymous function for: {func}')
+    return exp.Anonymous(this=func, expressions=args)
+
+
+def convert_arithmetic_op(expr_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Convert arithmetic operation to sqlglot expression.
+
+    Raises:
+        MissingFieldError: If left or right operand is missing
+        UnknownOperatorError: If operator is not supported
+    """
+    op = expr_spec.get('op')
+    if not op:
+        raise MissingFieldError('op', path='op', context='arithmetic operation')
+
+    if 'left' not in expr_spec:
+        raise MissingFieldError('left', path='left', context='arithmetic operation')
+    if 'right' not in expr_spec:
+        raise MissingFieldError('right', path='right', context='arithmetic operation')
+
+    left = jsql_expression_to_sqlglot(expr_spec['left'])
+    right = jsql_expression_to_sqlglot(expr_spec['right'])
+
+    # Use mapping instead of match statement
+    operator_class = ARITHMETIC_OP_TO_SQLGLOT.get(op)
+    if not operator_class:
+        raise UnknownOperatorError(
+            operator=op,
+            path='op',
+            supported=list(ARITHMETIC_OP_TO_SQLGLOT.keys())
+        )
+
+    return operator_class(this=left, expression=right)
+
+
+def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
+    """
+    Convert sqlglot expression to JSQL expression.
+
+    Raises:
+        InvalidExpressionError: If expression structure is invalid
+        UnknownOperatorError: If arithmetic operator is not supported
+        UnsupportedOperationError: If expression type is not supported
+    """
+    # Handle aliased expressions
+    if isinstance(expr, exp.Alias):
+        base_expr = convert_expression_to_jsql(expr.this)
+        base_expr['alias'] = expr.alias
+        return base_expr
+
+    # Handle column references
+    if isinstance(expr, exp.Column):
+        result: JSQLExpression = {'field': expr.name}
+        if expr.table:
+            result['field'] = f'{expr.table}.{expr.name}'
+        return result
+
+    # Handle literals
+    if isinstance(expr, exp.Literal):
+        return {'value': expr.this}
+
+    # Handle star (SELECT *)
+    if isinstance(expr, exp.Star):
+        return {'field': '*'}
+
+    # Handle functions
+    if isinstance(expr, exp.Func):
+        func_name = expr.sql_name()
+        # Single pass: type check, convert, and filter in one comprehension
+        # After error handling fix, None won't be returned, but we still filter
+        # for cases where conversion might fail (shouldn't happen, but defensive)
+        args = [
+            converted
+            for arg in expr.args.values()
+            if isinstance(arg, exp.Expression) and (converted := convert_expression_to_jsql(arg)) is not None
+        ]
+
+        return {
+            'func': func_name,
+            'args': args,
+        }
+
+    # Handle binary operations (use reverse mapping)
+    if isinstance(expr, (exp.Add, exp.Sub, exp.Mul, exp.Div)):
+        op = SQLGLOT_TO_ARITHMETIC.get(type(expr))
+        if not op:
+            raise UnknownOperatorError(
+                operator=type(expr).__name__,
+                path='',
+                supported=list(SQLGLOT_TO_ARITHMETIC.values())
+            )
+
+        return {
+            'op': op,
+            'left': convert_expression_to_jsql(expr.left),
+            'right': convert_expression_to_jsql(expr.right),
+        }
+
+    # Default: unsupported expression type
+    raise UnsupportedOperationError(
+        operation=f'Expression type: {type(expr).__name__}',
+        reason='This expression type is not supported in JSQL conversion',
+        path=''
+    )
