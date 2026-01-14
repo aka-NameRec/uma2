@@ -48,6 +48,10 @@ class JSQLParser:
         self.ctes: dict[str, Select] = {}  # CTEs by name
         self.table_aliases: dict[str, Any] = {}  # Table aliases for joins
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
+        
+        # Column index for fast O(1) unqualified column lookup
+        # Maps column_name -> list of (table_alias, column) tuples
+        self._column_index: dict[str, list[tuple[str, ColumnElement]]] = {}
 
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
@@ -110,7 +114,16 @@ class JSQLParser:
             cte_query = await self._build_query(cte_def[JSQLField.QUERY.value])
 
             # Register CTE for later use
-            self.ctes[cte_name] = cte_query.cte(name=cte_name)
+            cte = cte_query.cte(name=cte_name)
+            self.ctes[cte_name] = cte
+            
+            # Index CTE columns for fast lookup
+            if hasattr(cte, 'columns'):
+                for col in cte.columns:
+                    col_name = col.name
+                    if col_name not in self._column_index:
+                        self._column_index[col_name] = []
+                    self._column_index[col_name].append((cte_name, col))
 
     async def _build_query(self, jsql: JSQLQuery) -> Select:
         """
@@ -175,7 +188,7 @@ class JSQLParser:
 
     def _register_table_alias(self, alias_name: str, table: Any, *additional_aliases: str) -> None:
         """
-        Register table alias for column resolution.
+        Register table alias and index its columns for fast lookup.
 
         Args:
             alias_name: Primary alias name
@@ -185,6 +198,14 @@ class JSQLParser:
         self.table_aliases[alias_name] = table
         for additional_alias in additional_aliases:
             self.table_aliases[additional_alias] = table
+        
+        # Index columns for fast unqualified column lookup - O(1)
+        if hasattr(table, 'columns'):
+            for col in table.columns:
+                col_name = col.name
+                if col_name not in self._column_index:
+                    self._column_index[col_name] = []
+                self._column_index[col_name].append((alias_name, col))
 
     async def _build_from(self, from_spec: str) -> Any:
         """
@@ -382,18 +403,23 @@ class JSQLParser:
 
             raise JSQLSyntaxError(f'Column "{column_name}" not found in table "{table_name}"')
 
-        # Unqualified column - search in registered tables/CTEs
-        # First try table aliases
-        for table in self.table_aliases.values():
-            if hasattr(table, 'columns') and field_spec in table.columns:
-                return table.columns[field_spec]
-
-        # Try CTEs
-        for cte in self.ctes.values():
-            if hasattr(cte, 'columns') and field_spec in cte.columns:
-                return cte.columns[field_spec]
-
-        # Try FROM clause if provided
+        # Unqualified column - use index for O(1) lookup
+        if field_spec in self._column_index:
+            candidates = self._column_index[field_spec]
+            
+            # Unambiguous - single source
+            if len(candidates) == 1:
+                return candidates[0][1]
+            
+            # Ambiguous - multiple sources
+            # Provide helpful error with table names
+            table_names = [alias for alias, _ in candidates]
+            raise JSQLSyntaxError(
+                f'Ambiguous column "{field_spec}" found in tables: '
+                f'{", ".join(table_names)}. Use qualified name (e.g., {table_names[0]}.{field_spec})'
+            )
+        
+        # Try FROM clause as fallback
         if from_clause is not None and hasattr(from_clause, 'columns'):
             if field_spec in from_clause.columns:
                 return from_clause.columns[field_spec]
