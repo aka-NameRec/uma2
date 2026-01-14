@@ -14,8 +14,9 @@ from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from namerec.uma import initialize_uma
-from namerec.uma import uma_select
+from namerec.uma import DefaultMetadataProvider
+from namerec.uma import NamespaceConfig
+from namerec.uma import UMA
 
 
 async def main() -> None:
@@ -73,7 +74,13 @@ async def main() -> None:
         )
 
     # Initialize UMA
-    initialize_uma(engine, metadata)
+    metadata_provider = DefaultMetadataProvider()
+    uma = UMA.create({
+        'main': NamespaceConfig(
+            engine=engine,
+            metadata_provider=metadata_provider,
+        ),
+    })
 
     print('=' * 80)
     print('JSQL Query Examples')
@@ -91,7 +98,7 @@ async def main() -> None:
             'right': {'value': 'Engineering'},
         },
     }
-    result1 = await uma_select(jsql1)
+    result1 = await uma.select(jsql1)
     print('JSQL:', jsql1)
     print('\nResult metadata:')
     for col in result1['meta']:
@@ -113,7 +120,7 @@ async def main() -> None:
         'group_by': [{'field': 'customer_id'}],
         'order_by': [{'field': 'total_spent', 'direction': 'desc'}],
     }
-    result2 = await uma_select(jsql2)
+    result2 = await uma.select(jsql2)
     print('JSQL:', jsql2)
     print('\nResult metadata:')
     for col in result2['meta']:
@@ -155,7 +162,7 @@ async def main() -> None:
         ],
         'limit': 3,
     }
-    result3 = await uma_select(jsql3)
+    result3 = await uma.select(jsql3)
     print('JSQL:', jsql3)
     print('\nResult metadata:')
     for col in result3['meta']:
@@ -201,7 +208,7 @@ async def main() -> None:
         ],
         'group_by': [{'field': 'ec.name'}],
     }
-    result4 = await uma_select(jsql4)
+    result4 = await uma.select(jsql4)
     print('JSQL:', jsql4)
     print('\nResult data:')
     for row in result4['data']:
@@ -229,7 +236,7 @@ async def main() -> None:
             },
         },
     }
-    result5 = await uma_select(jsql5)
+    result5 = await uma.select(jsql5)
     print('JSQL:', jsql5)
     print('\nResult data:')
     for row in result5['data']:
@@ -261,7 +268,7 @@ async def main() -> None:
         'min_amount': 100,
         'customer_id': 1,
     }
-    result6 = await uma_select(jsql6, params6)
+    result6 = await uma.select(jsql6, params6)
     print('JSQL:', jsql6)
     print('Params:', params6)
     print('\nResult data:')
@@ -307,7 +314,7 @@ async def main() -> None:
             },
         ],
     }
-    result7 = await uma_select(jsql7)
+    result7 = await uma.select(jsql7)
     print('JSQL:', jsql7)
     print('\nResult data (order_id, customer, amount, rank, avg):')
     for row in result7['data']:
