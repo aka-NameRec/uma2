@@ -20,6 +20,7 @@ from sqlalchemy.sql.expression import ClauseElement
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.types import EntityName
 from namerec.uma.core.utils import parse_entity_name
+from namerec.uma.jsql.alias_manager import AliasManager
 from namerec.uma.jsql.constants import ARITHMETIC_OPERATORS
 from namerec.uma.jsql.constants import COMPARISON_OPERATORS
 from namerec.uma.jsql.constants import JoinType
@@ -45,13 +46,9 @@ class JSQLParser:
             context: UMA execution context
         """
         self.context = context
-        self.ctes: dict[str, Select] = {}  # CTEs by name
-        self.table_aliases: dict[str, Any] = {}  # Table aliases for joins
+        self.ctes: dict[str, Select] = {}  # CTEs by name (for SQLAlchemy queries)
+        self.alias_manager = AliasManager()  # Manages table/column aliases
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
-        
-        # Column index for fast O(1) unqualified column lookup
-        # Maps column_name -> list of (table_alias, column) tuples
-        self._column_index: dict[str, list[tuple[str, ColumnElement]]] = {}
 
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
@@ -117,13 +114,8 @@ class JSQLParser:
             cte = cte_query.cte(name=cte_name)
             self.ctes[cte_name] = cte
             
-            # Index CTE columns for fast lookup
-            if hasattr(cte, 'columns'):
-                for col in cte.columns:
-                    col_name = col.name
-                    if col_name not in self._column_index:
-                        self._column_index[col_name] = []
-                    self._column_index[col_name].append((cte_name, col))
+            # Register CTE in AliasManager for column resolution
+            self.alias_manager.register_cte(cte_name, cte)
 
     async def _build_query(self, jsql: JSQLQuery) -> Select:
         """
@@ -195,17 +187,8 @@ class JSQLParser:
             table: Table object
             additional_aliases: Additional alias names for the same table
         """
-        self.table_aliases[alias_name] = table
-        for additional_alias in additional_aliases:
-            self.table_aliases[additional_alias] = table
-        
-        # Index columns for fast unqualified column lookup - O(1)
-        if hasattr(table, 'columns'):
-            for col in table.columns:
-                col_name = col.name
-                if col_name not in self._column_index:
-                    self._column_index[col_name] = []
-                self._column_index[col_name].append((alias_name, col))
+        # Delegate to AliasManager
+        self.alias_manager.register_table(alias_name, table, *additional_aliases)
 
     async def _build_from(self, from_spec: str) -> Any:
         """
@@ -376,55 +359,23 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If column not found
         """
-        # Check if it's qualified (table.column)
-        if '.' in field_spec:
-            table_name, column_name = field_spec.split('.', 1)
-
-            # Check table aliases first
-            if table_name in self.table_aliases:
-                table = self.table_aliases[table_name]
-                if hasattr(table, 'columns') and column_name in table.columns:
-                    return table.columns[column_name]
-
-            # Check CTEs
-            if table_name in self.ctes:
-                cte = self.ctes[table_name]
-                if hasattr(cte, 'columns') and column_name in cte.columns:
-                    return cte.columns[column_name]
-
-            # Load table via metadata provider (lazy loading)
-            entity_name = parse_entity_name(table_name)
-            try:
-                table = await self._get_table_async(entity_name)
-                if column_name in table.columns:
-                    return table.columns[column_name]
-            except Exception as e:
-                raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
-
-            raise JSQLSyntaxError(f'Column "{column_name}" not found in table "{table_name}"')
-
-        # Unqualified column - use index for O(1) lookup
-        if field_spec in self._column_index:
-            candidates = self._column_index[field_spec]
+        # Try to resolve through AliasManager first
+        try:
+            return self.alias_manager.resolve_column(field_spec, from_clause)
+        except JSQLSyntaxError:
+            # If qualified column not found in aliases, try lazy loading
+            if '.' in field_spec:
+                table_name, column_name = field_spec.split('.', 1)
+                entity_name = parse_entity_name(table_name)
+                try:
+                    table = await self._get_table_async(entity_name)
+                    if column_name in table.columns:
+                        return table.columns[column_name]
+                except Exception as e:
+                    raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
             
-            # Unambiguous - single source
-            if len(candidates) == 1:
-                return candidates[0][1]
-            
-            # Ambiguous - multiple sources
-            # Provide helpful error with table names
-            table_names = [alias for alias, _ in candidates]
-            raise JSQLSyntaxError(
-                f'Ambiguous column "{field_spec}" found in tables: '
-                f'{", ".join(table_names)}. Use qualified name (e.g., {table_names[0]}.{field_spec})'
-            )
-        
-        # Try FROM clause as fallback
-        if from_clause is not None and hasattr(from_clause, 'columns'):
-            if field_spec in from_clause.columns:
-                return from_clause.columns[field_spec]
-
-        raise JSQLSyntaxError(f'Column "{field_spec}" not found')
+            # Re-raise original error if lazy loading also fails
+            raise
 
     async def _process_joins_for_aliases(self, joins_spec: list[dict[str, Any]], base_table: Any) -> Any:
         """
