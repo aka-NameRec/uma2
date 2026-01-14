@@ -1,6 +1,7 @@
 """High-level API functions for UMA."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from namerec.uma.core.context import UMAContext
@@ -18,6 +19,15 @@ from namerec.uma.registry import EntityRegistry
 
 # Global objects (initialized at startup)
 _registry: EntityRegistry | None = None
+
+
+@dataclass
+class EntityOperationParams:
+    """Parameters prepared for entity operation."""
+
+    entity: EntityName
+    context: UMAContext
+    handler: EntityHandler
 
 
 def uma_initialize(
@@ -159,6 +169,46 @@ def _check_access(
             raise UMAAccessDeniedError(entity_name, operation.value)
 
 
+async def _prepare_entity_operation(
+    entity_name: str,
+    operation: Operation,
+    namespace: str | None = None,
+    user_context: Any = None,
+) -> EntityOperationParams:
+    """
+    Prepare common parameters for entity operation.
+
+    Args:
+        entity_name: Entity name (can include namespace)
+        operation: Operation type for access control
+        namespace: Optional namespace override
+        user_context: User context for access control
+
+    Returns:
+        EntityOperationParams with entity, context, and handler
+
+    Raises:
+        UMAAccessDeniedError: If access denied
+        RuntimeError: If UMA not initialized
+        ValueError: If namespace not found
+    """
+    # Parse entity name
+    entity = parse_entity_name(entity_name)
+    if namespace and not entity.namespace:
+        entity = EntityName(entity=entity.entity, namespace=namespace)
+
+    # Create context for namespace
+    context = _create_context(entity.namespace, user_context)
+
+    # Check access
+    _check_access(str(entity), operation, context)
+
+    # Get handler
+    handler = await get_registry().get_handler(entity, context)
+
+    return EntityOperationParams(entity, context, handler)
+
+
 # ========== API Functions ==========
 
 
@@ -185,20 +235,10 @@ async def uma_read(
         UMANotFoundError: If record not found
         RuntimeError: If UMA not initialized
     """
-    # Parse entity name
-    entity = parse_entity_name(entity_name)
-    if namespace and not entity.namespace:
-        entity = EntityName(entity=entity.entity, namespace=namespace)
-
-    # Create context for namespace
-    context = _create_context(entity.namespace, user_context)
-
-    # Check access
-    _check_access(str(entity), Operation.READ, context)
-
-    # Get handler and execute
-    handler = await get_registry().get_handler(entity, context)
-    return await handler.read(entity, id_value, context)
+    params = await _prepare_entity_operation(
+        entity_name, Operation.READ, namespace, user_context
+    )
+    return await params.handler.read(params.entity, id_value, params.context)
 
 
 async def uma_save(
@@ -224,25 +264,15 @@ async def uma_save(
         UMANotFoundError: If record not found (for update)
         RuntimeError: If UMA not initialized
     """
-    # Parse entity name
-    entity = parse_entity_name(entity_name)
-    if namespace and not entity.namespace:
-        entity = EntityName(entity=entity.entity, namespace=namespace)
-
-    # Create context for namespace
-    context = _create_context(entity.namespace, user_context)
-
     # Determine operation (create or update)
     # Check if record has ID to determine if it's create or update
     has_id = any(data.get(key) is not None for key in ['id', 'ID'])
     operation = Operation.UPDATE if has_id else Operation.CREATE
 
-    # Check access
-    _check_access(str(entity), operation, context)
-
-    # Get handler and execute
-    handler = await get_registry().get_handler(entity, context)
-    return await handler.save(entity, data, context)
+    params = await _prepare_entity_operation(
+        entity_name, operation, namespace, user_context
+    )
+    return await params.handler.save(params.entity, data, params.context)
 
 
 async def uma_delete(
@@ -268,20 +298,10 @@ async def uma_delete(
         UMANotFoundError: If record not found
         RuntimeError: If UMA not initialized
     """
-    # Parse entity name
-    entity = parse_entity_name(entity_name)
-    if namespace and not entity.namespace:
-        entity = EntityName(entity=entity.entity, namespace=namespace)
-
-    # Create context for namespace
-    context = _create_context(entity.namespace, user_context)
-
-    # Check access
-    _check_access(str(entity), Operation.DELETE, context)
-
-    # Get handler and execute
-    handler = await get_registry().get_handler(entity, context)
-    return await handler.delete(entity, id_value, context)
+    params = await _prepare_entity_operation(
+        entity_name, Operation.DELETE, namespace, user_context
+    )
+    return await params.handler.delete(params.entity, id_value, params.context)
 
 
 async def uma_entity_details(
@@ -305,20 +325,10 @@ async def uma_entity_details(
         UMANotFoundError: If entity not found
         RuntimeError: If UMA not initialized
     """
-    # Parse entity name
-    entity = parse_entity_name(entity_name)
-    if namespace and not entity.namespace:
-        entity = EntityName(entity=entity.entity, namespace=namespace)
-
-    # Create context for namespace
-    context = _create_context(entity.namespace, user_context)
-
-    # Check access
-    _check_access(str(entity), Operation.META, context)
-
-    # Get handler and execute
-    handler = await get_registry().get_handler(entity, context)
-    return await handler.meta(entity, context)
+    params = await _prepare_entity_operation(
+        entity_name, Operation.META, namespace, user_context
+    )
+    return await params.handler.meta(params.entity, params.context)
 
 
 async def uma_entity_list(
