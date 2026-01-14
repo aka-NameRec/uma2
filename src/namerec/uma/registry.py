@@ -4,6 +4,7 @@ from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
+from namerec.uma.handlers.base import DefaultEntityHandler
 
 
 class EntityRegistry:
@@ -20,12 +21,7 @@ class EntityRegistry:
             default_handler: Default handler class for unregistered entities
         """
         self._handlers: dict[str, type[EntityHandler]] = {}
-        self._default_handler = default_handler
-        if default_handler is None:
-            # Import here to avoid circular dependency
-            from namerec.uma.handlers.base import DefaultEntityHandler
-
-            self._default_handler = DefaultEntityHandler
+        self._default_handler = default_handler or DefaultEntityHandler
 
     def register(
         self,

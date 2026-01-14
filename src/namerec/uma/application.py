@@ -12,6 +12,7 @@ from namerec.uma.core.types import EntityName
 from namerec.uma.core.types import Operation
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
+from namerec.uma.jsql.executor import JSQLExecutor
 from namerec.uma.registry import EntityRegistry
 
 
@@ -282,8 +283,6 @@ class UMA:
             JSQLSyntaxError: If JSQL syntax is invalid
             JSQLExecutionError: If query execution fails
         """
-        from namerec.uma.jsql.executor import JSQLExecutor
-
         # Extract entity_name from JSQL
         entity_name = jsql.get('from')
         if not entity_name:

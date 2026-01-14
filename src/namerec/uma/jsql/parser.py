@@ -19,6 +19,7 @@ from sqlalchemy.sql.expression import ClauseElement
 
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.types import EntityName
+from namerec.uma.core.utils import get_table
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.jsql.alias_manager import AliasManager
 from namerec.uma.jsql.constants import ARITHMETIC_OPERATORS
@@ -243,8 +244,6 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If table not found
         """
-        from namerec.uma.core.utils import get_table
-
         try:
             return await get_table(self.context, entity_name)
         except Exception as e:
