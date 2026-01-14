@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 
 from namerec.uma.core.context import UMAContext
@@ -12,17 +13,10 @@ from namerec.uma.core.types import EntityName
 from namerec.uma.core.types import Operation
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
+from namerec.uma.jsql.cache import CacheBackend
+from namerec.uma.jsql.cache import MemoryCacheBackend
 from namerec.uma.jsql.executor import JSQLExecutor
 from namerec.uma.registry import EntityRegistry
-
-
-@dataclass
-class EntityOperationParams:
-    """Parameters prepared for entity operation."""
-
-    entity: EntityName
-    context: UMAContext
-    handler: EntityHandler
 
 
 @dataclass
@@ -31,10 +25,10 @@ class UMA:
     UMA application instance with encapsulated state.
 
     Manages entity registry, namespace configurations, and provides
-    high-level API for data operations.
+    high-level API for data operations with optional query caching.
 
     Example:
-        # Create UMA instance
+        # Create UMA instance with default memory cache
         uma = UMA.create({
             'main': NamespaceConfig(
                 engine=engine,
@@ -42,20 +36,48 @@ class UMA:
             ),
         })
 
+        # Create with Redis cache
+        from namerec.uma.jsql.cache.redis import RedisCacheBackend
+        uma = UMA.create(
+            namespace_configs={'main': config},
+            cache_backend=RedisCacheBackend('redis://localhost:6379/0'),
+        )
+
         # Use UMA
         user = await uma.read('users', id=1)
         await uma.save('users', {'name': 'John', 'email': 'john@example.com'})
+
+        # Query with caching
+        result = await uma.select({'from': 'users', 'select': ['*']})
+
+        # Cache management
+        stats = uma.cache_stats()
+        uma.disable_cache()  # Temporarily disable for debugging
+        uma.enable_cache()
+        uma.clear_cache()
     """
+
+    @dataclass
+    class _EntityOperationParams:
+        """Internal helper: parameters prepared for entity operation."""
+
+        entity: EntityName
+        context: UMAContext
+        handler: EntityHandler
 
     registry: EntityRegistry
     namespace_configs: Mapping[str, NamespaceConfig]
     default_namespace: str | None = None
+    cache_backend: CacheBackend | None = field(default=None)
+    cache_enabled: bool = field(default=True)
 
     @classmethod
     def create(
         cls,
         namespace_configs: Mapping[str, NamespaceConfig],
         default_handler: type[EntityHandler] | None = None,
+        cache_backend: CacheBackend | None = None,
+        cache_enabled: bool = True,
     ) -> 'UMA':
         """
         Create UMA application instance.
@@ -63,6 +85,8 @@ class UMA:
         Args:
             namespace_configs: Mapping {namespace: NamespaceConfig}
             default_handler: Default handler class for unregistered entities
+            cache_backend: Optional cache backend (default: MemoryCacheBackend)
+            cache_enabled: Enable caching by default (default: True)
 
         Returns:
             Initialized UMA instance
@@ -73,9 +97,10 @@ class UMA:
         Behaviour:
         - If single namespace: it becomes default
         - If multiple namespaces: no default, explicit namespace required
+        - Cache enabled by default with MemoryCacheBackend (128 queries)
 
         Example:
-            # Single namespace (typical case)
+            # Single namespace with default memory cache
             uma = UMA.create({
                 'main': NamespaceConfig(
                     engine=engine,
@@ -83,11 +108,18 @@ class UMA:
                 ),
             })
 
-            # Multiple namespaces
-            uma = UMA.create({
-                'db1': NamespaceConfig(...),
-                'db2': NamespaceConfig(...),
-            })
+            # With Redis cache for multi-process deployment
+            from namerec.uma.jsql.cache_backend import RedisCacheBackend
+            uma = UMA.create(
+                namespace_configs={'main': config},
+                cache_backend=RedisCacheBackend('redis://localhost:6379/0'),
+            )
+
+            # Disable cache
+            uma = UMA.create(
+                namespace_configs={'main': config},
+                cache_enabled=False,
+            )
         """
         if not namespace_configs:
             msg = 'At least one namespace configuration required'
@@ -99,10 +131,16 @@ class UMA:
         # Create registry
         registry = EntityRegistry(default_handler or DefaultEntityHandler)
 
+        # Create default cache backend if not provided
+        if cache_backend is None and cache_enabled:
+            cache_backend = MemoryCacheBackend(max_size=128)
+
         return cls(
             registry=registry,
             namespace_configs=namespace_configs,
             default_namespace=default_ns,
+            cache_backend=cache_backend,
+            cache_enabled=cache_enabled,
         )
 
     # ========== Public API Methods ==========
@@ -300,8 +338,12 @@ class UMA:
         # Check access
         self._check_access(str(entity), Operation.SELECT, context)
 
-        # Execute JSQL query
-        executor = JSQLExecutor(context)
+        # Execute JSQL query with caching
+        executor = JSQLExecutor(
+            context,
+            cache_backend=self.cache_backend,
+            cache_enabled=self.cache_enabled,
+        )
         result = await executor.execute(jsql, params)
 
         return result.to_dict()
@@ -314,7 +356,7 @@ class UMA:
         operation: Operation,
         namespace: str | None = None,
         user_context: Any = None,
-    ) -> EntityOperationParams:
+    ) -> _EntityOperationParams:
         """
         Prepare common parameters for entity operation.
 
@@ -345,7 +387,7 @@ class UMA:
         # Get handler
         handler = await self.registry.get_handler(entity, context)
 
-        return EntityOperationParams(entity, context, handler)
+        return self._EntityOperationParams(entity, context, handler)
 
     def _create_context(
         self,
@@ -434,6 +476,78 @@ class UMA:
         """
         if isinstance(operation, str):
             operation = Operation(operation)
+
+    # ========== Cache Management API ==========
+
+    def enable_cache(self) -> None:
+        """
+        Enable query caching.
+
+        Useful for re-enabling cache after temporary disabling for debugging.
+
+        Example:
+            uma.disable_cache()
+            # ... debug without cache ...
+            uma.enable_cache()
+        """
+        self.cache_enabled = True
+
+    def disable_cache(self) -> None:
+        """
+        Disable query caching.
+
+        Useful for debugging when you need to ensure queries hit the database.
+        Cache contents are preserved - only lookup is disabled.
+
+        Example:
+            # Disable cache for debugging
+            uma.disable_cache()
+            result = await uma.select({'from': 'users', 'select': ['*']})
+            uma.enable_cache()
+        """
+        self.cache_enabled = False
+
+    def clear_cache(self) -> None:
+        """
+        Clear all cached queries.
+
+        Use when you need to invalidate cache (e.g., after schema changes).
+
+        Example:
+            # After schema migration
+            uma.clear_cache()
+        """
+        if self.cache_backend:
+            self.cache_backend.clear()
+
+    def cache_stats(self) -> dict[str, Any]:
+        """
+        Get cache statistics.
+
+        Returns:
+            Dictionary with cache statistics:
+            - backend: Backend type ('memory', 'redis', etc.)
+            - size: Current number of cached queries
+            - hits: Cache hit count
+            - misses: Cache miss count
+            - hit_rate: Hit rate (0.0-1.0)
+            - Additional backend-specific stats
+
+        Example:
+            stats = uma.cache_stats()
+            print(f"Cache hit rate: {stats['hit_rate']:.2%}")
+            print(f"Cached queries: {stats['size']}")
+        """
+        if self.cache_backend:
+            return self.cache_backend.stats()
+
+        return {
+            'backend': 'none',
+            'size': 0,
+            'hits': 0,
+            'misses': 0,
+            'hit_rate': 0.0,
+        }
 
         # Check if metadata provider has can() method
         if hasattr(context.metadata_provider, 'can'):
