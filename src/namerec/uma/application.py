@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
 
+from namerec.uma.core.access import check_access
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMAAccessDeniedError
 from namerec.uma.core.namespace_config import NamespaceConfig
@@ -15,6 +16,7 @@ from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
 from namerec.uma.jsql.cache import CacheBackend
 from namerec.uma.jsql.cache import MemoryCacheBackend
+from namerec.uma.jsql.executor import JSQLExecutor
 from namerec.uma.registry import EntityRegistry
 
 
@@ -108,7 +110,7 @@ class UMA:
             })
 
             # With Redis cache for multi-process deployment
-            from namerec.uma.jsql.cache_backend import RedisCacheBackend
+            from namerec.uma.jsql.cache.redis import RedisCacheBackend
             uma = UMA.create(
                 namespace_configs={'main': config},
                 cache_backend=RedisCacheBackend('redis://localhost:6379/0'),
@@ -323,8 +325,6 @@ class UMA:
             JSQLSyntaxError: If JSQL syntax is invalid
             JSQLExecutionError: If query execution fails
         """
-        from namerec.uma.jsql.executor import JSQLExecutor
-
         result = await JSQLExecutor.execute(
             jsql=jsql,
             params=params,
@@ -461,8 +461,6 @@ class UMA:
         Raises:
             UMAAccessDeniedError: If access denied
         """
-        from namerec.uma.core.access import check_access
-
         check_access(
             metadata_provider=context.metadata_provider,
             entity_name=entity_name,

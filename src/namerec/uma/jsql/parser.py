@@ -20,6 +20,7 @@ from sqlalchemy.sql.expression import ClauseElement
 
 from collections.abc import Mapping
 
+from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import EntityName
 from namerec.uma.core.utils import parse_entity_name
@@ -259,6 +260,17 @@ class JSQLParser:
 
         return self.namespace_configs[namespace]
 
+    def _get_default_namespace(self) -> str | None:
+        """
+        Get default namespace if single namespace configured.
+
+        Returns:
+            Namespace name if single namespace, None otherwise
+        """
+        if len(self.namespace_configs) == 1:
+            return next(iter(self.namespace_configs.keys()))
+        return None
+
     def _determine_namespace_from_parsed_query(self, jsql: dict) -> str:
         """
         Determine namespace from parsed query.
@@ -279,8 +291,9 @@ class JSQLParser:
         from_entity = jsql.get('from')
         if not from_entity:
             # No FROM - use default
-            if len(self.namespace_configs) == 1:
-                return next(iter(self.namespace_configs.keys()))
+            default_ns = self._get_default_namespace()
+            if default_ns:
+                return default_ns
             raise ValueError("JSQL must contain 'from' field")
 
         entity = parse_entity_name(from_entity if isinstance(from_entity, str) else '')
@@ -289,8 +302,9 @@ class JSQLParser:
         if entity.namespace:
             return entity.namespace
 
-        if len(self.namespace_configs) == 1:
-            return next(iter(self.namespace_configs.keys()))
+        default_ns = self._get_default_namespace()
+        if default_ns:
+            return default_ns
 
         raise ValueError(
             'Namespace not specified and no default available. '
@@ -315,8 +329,9 @@ class JSQLParser:
         namespace = entity_name.namespace
         if not namespace:
             # Resolve default namespace
-            if len(self.namespace_configs) == 1:
-                namespace = next(iter(self.namespace_configs.keys()))
+            default_ns = self._get_default_namespace()
+            if default_ns:
+                namespace = default_ns
             else:
                 raise ValueError(
                     'Namespace not specified and no default available. '
@@ -331,7 +346,7 @@ class JSQLParser:
                 config.engine,
                 None,
             )
-        except Exception as e:
+        except (UMANotFoundError, RuntimeError) as e:
             raise JSQLSyntaxError(f'Table "{entity_name}" not found: {e}') from e
 
     def _apply_alias(self, expression: ColumnElement, alias_name: str | None) -> ColumnElement:
@@ -455,7 +470,7 @@ class JSQLParser:
                     table = await self._get_table_async(entity_name)
                     if column_name in table.columns:
                         return table.columns[column_name]
-                except Exception as e:
+                except (UMANotFoundError, RuntimeError) as e:
                     raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
             
             # Re-raise original error if lazy loading also fails
@@ -505,7 +520,7 @@ class JSQLParser:
                 entity_name = parse_entity_name(table_name)
                 try:
                     table = await self._get_table_async(entity_name)
-                except Exception as e:
+                except (UMANotFoundError, RuntimeError) as e:
                     raise JSQLSyntaxError(f'Table "{table_name}" not found: {e}', path) from e
 
             # Handle alias

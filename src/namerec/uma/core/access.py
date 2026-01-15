@@ -3,11 +3,12 @@
 from typing import Any
 
 from namerec.uma.core.exceptions import UMAAccessDeniedError
+from namerec.uma.core.types import MetadataProvider
 from namerec.uma.core.types import Operation
 
 
 def check_access(
-    metadata_provider: Any,
+    metadata_provider: MetadataProvider,
     entity_name: str,
     operation: Operation | str,
     user_context: Any,
@@ -27,7 +28,6 @@ def check_access(
     if isinstance(operation, str):
         operation = Operation(operation)
 
-    # Check if metadata provider has can() method
-    if hasattr(metadata_provider, 'can'):
-        if not metadata_provider.can(entity_name, operation, user_context):
-            raise UMAAccessDeniedError(entity_name, operation.value)
+    # Check access using metadata provider's can() method
+    if not metadata_provider.can(entity_name, operation, user_context):
+        raise UMAAccessDeniedError(entity_name, operation.value)

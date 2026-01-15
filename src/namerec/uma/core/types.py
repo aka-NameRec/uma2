@@ -294,3 +294,22 @@ class MetadataProvider(Protocol):
             namespace: Namespace to preload (default: 'default')
         """
         ...
+
+    def can(
+        self,
+        entity_name: str,
+        operation: Operation | str,
+        user_context: Any,
+    ) -> bool:
+        """
+        Check access to operation.
+
+        Args:
+            entity_name: Entity name (empty string for "list entities" operation)
+            operation: Operation to check
+            user_context: User context for access control
+
+        Returns:
+            True if access allowed, False otherwise
+        """
+        ...

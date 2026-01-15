@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlalchemy.sql.expression import Select
 
+from namerec.uma.core.access import check_access
 from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import Operation
 from namerec.uma.jsql.cache.keys import CachedQuery
@@ -48,8 +49,6 @@ class JSQLExecutor:
             JSQLSyntaxError: If JSQL syntax is invalid
             JSQLExecutionError: If query execution fails
         """
-        from namerec.uma.core.access import check_access
-
         # Validate FROM field early (before parsing)
         if 'from' not in jsql:
             raise ValueError("JSQL must contain 'from' field")
@@ -152,13 +151,15 @@ class JSQLExecutor:
             try:
                 compiled = query.compile(compile_kwargs={'literal_binds': True})
                 sql_str = str(compiled)
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 # Fallback: compile without literal binds if it fails
+                # (some dialects or parameter types don't support literal_binds)
                 compiled = query.compile()
                 sql_str = str(compiled)
 
             # Format SQL for readability
             return sqlparse.format(sql_str, reindent=True, keyword_case='upper')
-        except Exception as e:
+        except (ImportError, AttributeError, TypeError) as e:
             # Debug mode should never break query execution
+            # Catch formatting errors (sqlparse import issues, formatting errors)
             return f'-- Failed to generate debug SQL: {e!s}'
