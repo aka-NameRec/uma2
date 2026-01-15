@@ -3,24 +3,23 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 
 
 def make_cache_key(
     jsql: dict[str, Any],
     user_context: Any = None,
-    namespace: str | None = None,
 ) -> str:
     """
     Create cache key for JSQL query.
 
     Includes user context hash to handle different permissions per user.
-    Uses simple hashing without normalization for performance.
+    Namespace is already in jsql dict (in FROM clause), so no need to pass separately.
 
     Args:
-        jsql: JSQL query dictionary
+        jsql: JSQL query dictionary (contains namespace in FROM clause)
         user_context: User context (affects permissions/query results)
-        namespace: Namespace (affects table resolution)
 
     Returns:
         Cache key (compact hash)
@@ -32,7 +31,7 @@ def make_cache_key(
         >>> key1 != key2  # Different users = different cache keys
         True
     """
-    # Stable JSON representation
+    # Stable JSON representation (includes namespace from FROM clause)
     jsql_str = json.dumps(jsql, sort_keys=True, ensure_ascii=False)
 
     # Include user context in key (for permission-based queries)
@@ -45,11 +44,8 @@ def make_cache_key(
     else:
         context_str = ""
 
-    # Include namespace
-    namespace_str = namespace or ""
-
     # Combine all components
-    cache_input = f"{jsql_str}|{context_str}|{namespace_str}"
+    cache_input = f"{jsql_str}|{context_str}"
 
     # Use BLAKE2b for fast, secure hashing (16 bytes = 32 hex chars)
     return hashlib.blake2b(cache_input.encode(), digest_size=16).hexdigest()
@@ -99,6 +95,7 @@ class CachedQuery:
     sql: str  # Compiled SQL with parameter placeholders
     params_mapping: dict[str, str]  # JSQL param names -> SQL param names
     dialect: str  # SQL dialect (postgresql, mysql, etc.)
+    entities: list[str] = field(default_factory=list)  # Entities in SELECT clause
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for Redis storage."""
@@ -106,6 +103,7 @@ class CachedQuery:
             'sql': self.sql,
             'params_mapping': self.params_mapping,
             'dialect': self.dialect,
+            'entities': self.entities,
         }
 
     @classmethod
@@ -115,4 +113,5 @@ class CachedQuery:
             sql=data['sql'],
             params_mapping=data['params_mapping'],
             dialect=data['dialect'],
+            entities=data.get('entities', []),
         )

@@ -173,9 +173,13 @@ class AliasManager:
             )
 
         # Fallback to FROM clause
-        if from_clause and hasattr(from_clause, 'columns'):
-            if field_spec in from_clause.columns:
-                return from_clause.columns[field_spec]
+        if from_clause is not None:
+            try:
+                if hasattr(from_clause, 'columns') and field_spec in from_clause.columns:
+                    return from_clause.columns[field_spec]
+            except (TypeError, AttributeError):
+                # SQLAlchemy ClauseElement doesn't support bool() or columns access
+                pass
 
         raise JSQLSyntaxError(f'Column "{field_spec}" not found')
 

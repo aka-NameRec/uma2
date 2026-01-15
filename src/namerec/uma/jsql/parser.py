@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy import Select
+from sqlalchemy import Table
 from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import cast
@@ -17,9 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import ClauseElement
 
-from namerec.uma.core.context import UMAContext
+from collections.abc import Mapping
+
+from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import EntityName
-from namerec.uma.core.utils import get_table
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.jsql.alias_manager import AliasManager
 from namerec.uma.jsql.constants import ARITHMETIC_OPERATORS
@@ -39,14 +41,14 @@ class JSQLParser:
     Converts JSQL dict to SQLAlchemy Select statement.
     """
 
-    def __init__(self, context: UMAContext) -> None:
+    def __init__(self, namespace_configs: Mapping[str, NamespaceConfig]) -> None:
         """
         Initialize JSQL parser.
 
         Args:
-            context: UMA execution context
+            namespace_configs: Mapping of namespace names to configurations
         """
-        self.context = context
+        self.namespace_configs = namespace_configs
         self.ctes: dict[str, Select] = {}  # CTEs by name (for SQLAlchemy queries)
         self.alias_manager = AliasManager()  # Manages table/column aliases
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
@@ -64,19 +66,20 @@ class JSQLParser:
             JSQLOperator.LIKE: self._handle_like,
         }
 
-    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> Select:
+    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig]:
         """
-        Parse JSQL query into SQLAlchemy Select statement.
+        Parse JSQL query into SQLAlchemy Select statement and namespace config.
 
         Args:
             jsql: JSQL query dictionary
             params: Query parameters
 
         Returns:
-            SQLAlchemy Select statement
+            Tuple of (SQLAlchemy Select statement, NamespaceConfig)
 
         Raises:
             JSQLSyntaxError: If JSQL syntax is invalid
+            ValueError: If namespace not found or no default available
         """
         self.params = params or {}
 
@@ -87,7 +90,13 @@ class JSQLParser:
         # Build main query
         query = await self._build_query(jsql)
 
-        return query
+        # Determine namespace from parsed query
+        namespace = self._determine_namespace_from_parsed_query(jsql)
+
+        # Get namespace config (already validated in get_namespace_config)
+        config = self.get_namespace_config(namespace)
+
+        return query, config
 
     async def _parse_ctes(self, ctes: list[dict[str, Any]]) -> None:
         """
@@ -231,9 +240,68 @@ class JSQLParser:
         )
         return table
 
-    async def _get_table_async(self, entity_name: EntityName) -> Any:
+    def get_namespace_config(self, namespace: str) -> NamespaceConfig:
         """
-        Get table via metadata provider (lazy loading).
+        Get namespace config by name.
+
+        Args:
+            namespace: Namespace name
+
+        Returns:
+            NamespaceConfig for the namespace
+
+        Raises:
+            ValueError: If namespace not found
+        """
+        if namespace not in self.namespace_configs:
+            available = ', '.join(self.namespace_configs.keys())
+            raise ValueError(f'Namespace "{namespace}" not found. Available: {available}')
+
+        return self.namespace_configs[namespace]
+
+    def _determine_namespace_from_parsed_query(self, jsql: dict) -> str:
+        """
+        Determine namespace from parsed query.
+
+        Namespace comes from:
+        - FROM clause entity name
+        - Or default namespace if single namespace configured
+
+        Args:
+            jsql: JSQL query dictionary
+
+        Returns:
+            Namespace name
+
+        Raises:
+            ValueError: If namespace cannot be determined
+        """
+        from_entity = jsql.get('from')
+        if not from_entity:
+            # No FROM - use default
+            if len(self.namespace_configs) == 1:
+                return next(iter(self.namespace_configs.keys()))
+            raise ValueError("JSQL must contain 'from' field")
+
+        entity = parse_entity_name(from_entity if isinstance(from_entity, str) else '')
+
+        # Use entity namespace or default
+        if entity.namespace:
+            return entity.namespace
+
+        if len(self.namespace_configs) == 1:
+            return next(iter(self.namespace_configs.keys()))
+
+        raise ValueError(
+            'Namespace not specified and no default available. '
+            'Use explicit namespace or configure single namespace.'
+        )
+
+    async def _get_table_async(self, entity_name: EntityName) -> Table:
+        """
+        Get table from metadata provider.
+
+        Uses entity_name.namespace to determine which metadata provider to use.
 
         Args:
             entity_name: Entity name
@@ -244,8 +312,25 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If table not found
         """
+        namespace = entity_name.namespace
+        if not namespace:
+            # Resolve default namespace
+            if len(self.namespace_configs) == 1:
+                namespace = next(iter(self.namespace_configs.keys()))
+            else:
+                raise ValueError(
+                    'Namespace not specified and no default available. '
+                    'Use explicit namespace or configure single namespace.'
+                )
+
+        config = self.get_namespace_config(namespace)
+
         try:
-            return await get_table(self.context, entity_name)
+            return await config.metadata_provider.get_table(
+                entity_name,
+                config.engine,
+                None,
+            )
         except Exception as e:
             raise JSQLSyntaxError(f'Table "{entity_name}" not found: {e}') from e
 

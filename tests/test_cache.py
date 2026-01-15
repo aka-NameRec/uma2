@@ -138,9 +138,10 @@ class TestCacheKey:
 
     def test_namespace_affects_key(self):
         """Different namespaces should produce different keys."""
-        jsql = {'from': 'users', 'select': ['id', 'name']}
-        key1 = make_cache_key(jsql, namespace='db1')
-        key2 = make_cache_key(jsql, namespace='db2')
+        jsql1 = {'from': 'db1:users', 'select': ['id', 'name']}
+        jsql2 = {'from': 'db2:users', 'select': ['id', 'name']}
+        key1 = make_cache_key(jsql1)
+        key2 = make_cache_key(jsql2)
         assert key1 != key2
 
     def test_key_is_compact(self):

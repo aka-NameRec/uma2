@@ -15,7 +15,6 @@ from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
 from namerec.uma.jsql.cache import CacheBackend
 from namerec.uma.jsql.cache import MemoryCacheBackend
-from namerec.uma.jsql.executor import JSQLExecutor
 from namerec.uma.registry import EntityRegistry
 
 
@@ -306,11 +305,14 @@ class UMA:
         """
         Execute JSQL query.
 
+        All logic (FROM parsing, namespace resolution, context creation,
+        access control) is handled by stateless JSQLExecutor.
+
         Args:
             jsql: JSQL query dictionary (must contain 'from' field)
             params: Query parameters
             user_context: User context for access control
-            namespace: Optional namespace
+            namespace: Optional namespace (ignored - namespace from FROM clause is used)
 
         Returns:
             Dictionary with 'meta' and 'data' keys
@@ -321,34 +323,15 @@ class UMA:
             JSQLSyntaxError: If JSQL syntax is invalid
             JSQLExecutionError: If query execution fails
         """
-        # Extract entity_name from JSQL
-        entity_name = jsql.get('from')
-        if not entity_name:
-            msg = "JSQL must contain 'from' field"
-            raise ValueError(msg)
+        from namerec.uma.jsql.executor import JSQLExecutor
 
-        # Parse entity name to extract namespace
-        entity = parse_entity_name(entity_name)
-        if namespace and not entity.namespace:
-            entity = EntityName(entity=entity.entity, namespace=namespace)
-
-        # Create context for namespace
-        context = self._create_context(entity.namespace, user_context)
-
-        # Extract all entities from JSQL (including CTEs, joins)
-        entities_to_check = self._extract_entities_from_jsql(jsql)
-
-        # Check access for all entities
-        for entity_name_to_check in entities_to_check:
-            self._check_access(entity_name_to_check, Operation.SELECT, context)
-
-        # Execute JSQL query with caching
-        executor = JSQLExecutor(
-            context,
-            cache_backend=self.cache_backend,
-            cache_enabled=self.cache_enabled,
+        result = await JSQLExecutor.execute(
+            jsql=jsql,
+            params=params,
+            namespace_configs=self.namespace_configs,
+            user_context=user_context,
+            cache_backend=self.cache_backend if self.cache_enabled else None,
         )
-        result = await executor.execute(jsql, params)
 
         return result.to_dict()
 
@@ -461,150 +444,6 @@ class UMA:
 
         return self.namespace_configs[namespace]
 
-    def _extract_entities_from_jsql(self, jsql: dict[str, Any]) -> set[str]:
-        """
-        Extract all entity names from JSQL query for access control.
-
-        Recursively extracts entities from:
-        - FROM clause
-        - WITH clause (CTEs)
-        - JOIN clauses
-        - Subqueries
-
-        Args:
-            jsql: JSQL query dictionary
-
-        Returns:
-            Set of entity names (qualified with namespace if present)
-
-        Note:
-            This is a conservative extraction - it may include entities that
-            are not directly queried (e.g., in expressions), but this is
-            safer for access control.
-        """
-        entities: set[str] = set()
-
-        # Extract FROM entity
-        if from_entity := jsql.get('from'):
-            if isinstance(from_entity, str):
-                entities.add(from_entity)
-            elif isinstance(from_entity, dict):
-                # Handle subquery in FROM
-                entities.update(self._extract_entities_from_jsql(from_entity))
-
-        # Extract CTEs (WITH clause)
-        # CTE can be either list of dicts [{'name': 'cte1', 'query': {...}}]
-        # or dict of named CTEs {'cte1': {...}}
-        # Note: CTEs themselves don't need access control (they're query definitions),
-        # but we need to check access to entities used in CTE definitions
-        if with_clauses := jsql.get('with'):
-            if isinstance(with_clauses, list):
-                for cte in with_clauses:
-                    if isinstance(cte, dict):
-                        # Extract from CTE definition
-                        if cte_query := cte.get('query'):
-                            if isinstance(cte_query, dict):
-                                entities.update(self._extract_entities_from_jsql(cte_query))
-            elif isinstance(with_clauses, dict):
-                for cte_def in with_clauses.values():
-                    if isinstance(cte_def, dict):
-                        entities.update(self._extract_entities_from_jsql(cte_def))
-
-        # Extract JOINs
-        if joins := jsql.get('joins'):
-            for join in joins:
-                if isinstance(join, dict):
-                    # Extract join table
-                    if join_table := join.get('table'):
-                        if isinstance(join_table, str):
-                            entities.add(join_table)
-                        elif isinstance(join_table, dict):
-                            # Subquery in join
-                            entities.update(self._extract_entities_from_jsql(join_table))
-
-                    # Extract entities from ON clause
-                    if on_clause := join.get('on'):
-                        if isinstance(on_clause, dict):
-                            entities.update(self._extract_entities_from_expression(on_clause))
-
-        # Extract entities from WHERE, HAVING, GROUP_BY, ORDER_BY
-        for clause in ['where', 'having', 'group_by', 'order_by']:
-            if clause_data := jsql.get(clause):
-                if isinstance(clause_data, dict):
-                    entities.update(self._extract_entities_from_expression(clause_data))
-                elif isinstance(clause_data, list):
-                    for item in clause_data:
-                        if isinstance(item, dict):
-                            entities.update(self._extract_entities_from_expression(item))
-
-        # Extract entities from SELECT clause
-        if select_clause := jsql.get('select'):
-            if isinstance(select_clause, list):
-                for select_item in select_clause:
-                    if isinstance(select_item, dict):
-                        entities.update(self._extract_entities_from_expression(select_item))
-
-        return entities
-
-    def _extract_entities_from_expression(self, expr: dict[str, Any]) -> set[str]:
-        """
-        Extract entity names from JSQL expression.
-
-        Recursively processes:
-        - Field references
-        - Function calls
-        - Operators
-        - Subqueries
-
-        Args:
-            expr: JSQL expression dictionary
-
-        Returns:
-            Set of entity names
-        """
-        entities: set[str] = set()
-
-        # Field reference
-        if field := expr.get('field'):
-            if isinstance(field, str):
-                # Extract entity from qualified field (table.column)
-                if '.' in field:
-                    entity_part = field.split('.', 1)[0]
-                    # Skip if it's a function or special value
-                    if not entity_part.isupper():
-                        entities.add(entity_part)
-            elif isinstance(field, dict):
-                entities.update(self._extract_entities_from_expression(field))
-
-        # Function call
-        if 'func' in expr:
-            if args := expr.get('args'):
-                if isinstance(args, list):
-                    for arg in args:
-                        if isinstance(arg, dict):
-                            entities.update(self._extract_entities_from_expression(arg))
-                elif isinstance(args, dict):
-                    entities.update(self._extract_entities_from_expression(args))
-
-        # Binary operator
-        if 'left' in expr and 'right' in expr:
-            if isinstance(expr['left'], dict):
-                entities.update(self._extract_entities_from_expression(expr['left']))
-            if isinstance(expr['right'], dict):
-                entities.update(self._extract_entities_from_expression(expr['right']))
-
-        # Subquery
-        if 'subquery' in expr:
-            if isinstance(expr['subquery'], dict):
-                entities.update(self._extract_entities_from_jsql(expr['subquery']))
-
-        # Expression
-        if 'expr' in expr:
-            if isinstance(expr['expr'], dict):
-                entities.update(self._extract_entities_from_expression(expr['expr']))
-
-        return entities
-
     def _check_access(
         self,
         entity_name: str,
@@ -622,13 +461,14 @@ class UMA:
         Raises:
             UMAAccessDeniedError: If access denied
         """
-        if isinstance(operation, str):
-            operation = Operation(operation)
+        from namerec.uma.core.access import check_access
 
-        # Check if metadata provider has can() method
-        if hasattr(context.metadata_provider, 'can'):
-            if not context.metadata_provider.can(entity_name, operation, context):  # type: ignore[union-attr]
-                raise UMAAccessDeniedError(entity_name, operation.value)
+        check_access(
+            metadata_provider=context.metadata_provider,
+            entity_name=entity_name,
+            operation=operation,
+            user_context=context.user_context,
+        )
 
     # ========== Cache Management API ==========
 
@@ -701,8 +541,3 @@ class UMA:
             'misses': 0,
             'hit_rate': 0.0,
         }
-
-        # Check if metadata provider has can() method
-        if hasattr(context.metadata_provider, 'can'):
-            if not context.metadata_provider.can(entity_name, operation, context):  # type: ignore[union-attr]
-                raise UMAAccessDeniedError(entity_name, operation.value)

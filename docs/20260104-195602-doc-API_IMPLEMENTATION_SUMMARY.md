@@ -41,31 +41,29 @@
 4. **Документация**
    - Обновлены QUICKSTART.md, VERIFICATION.md, CREATED_FILES_SUMMARY.md
 
-## API Функции
+## API Методы
 
-### 1. `initialize_uma()`
+### 1. `UMA.create()`
 
 ```python
-from namerec.uma import initialize_uma
+from namerec.uma import UMA, DefaultMetadataProvider, NamespaceConfig
 
-registry = initialize_uma(
-    engine=engine,
-    metadata=metadata,
-    metadata_provider=None,  # Optional
-    default_handler=None,    # Optional
-)
+uma = UMA.create({
+    'main': NamespaceConfig(
+        engine=engine,
+        metadata_provider=DefaultMetadataProvider(),
+    ),
+})
 ```
 
 **Назначение**: Инициализация UMA при старте приложения
 
-**Возвращает**: `EntityRegistry`
+**Возвращает**: `UMA` instance
 
-### 2. `uma_read()`
+### 2. `uma.read()`
 
 ```python
-from namerec.uma import uma_read
-
-user = await uma_read(
+user = await uma.read(
     entity_name='users',
     id_value=123,
     user_context=current_user,  # Optional
@@ -79,16 +77,14 @@ user = await uma_read(
 
 **Исключения**: `UMAAccessDeniedError`, `UMANotFoundError`
 
-### 3. `uma_save()`
+### 3. `uma.save()`
 
 ```python
-from namerec.uma import uma_save
-
 # Create
-user_id = await uma_save('users', {'name': 'John'})
+user_id = await uma.save('users', {'name': 'John'})
 
 # Update
-await uma_save('users', {'id': 123, 'name': 'John Smith'})
+await uma.save('users', {'id': 123, 'name': 'John Smith'})
 ```
 
 **Назначение**: Создание или обновление записи
@@ -97,24 +93,20 @@ await uma_save('users', {'id': 123, 'name': 'John Smith'})
 
 **Логика**: Если в `data` есть `id` - UPDATE, иначе CREATE
 
-### 4. `uma_delete()`
+### 4. `uma.delete()`
 
 ```python
-from namerec.uma import uma_delete
-
-deleted = await uma_delete('users', 123, user_context=current_user)
+deleted = await uma.delete('users', 123, user_context=current_user)
 ```
 
 **Назначение**: Удаление записи по ID
 
 **Возвращает**: `bool` - True если удалено
 
-### 5. `uma_meta()`
+### 5. `uma.entity_details()`
 
 ```python
-from namerec.uma import uma_meta
-
-metadata = await uma_meta('users')
+metadata = await uma.entity_details('users')
 print(metadata['columns'])
 ```
 
@@ -122,12 +114,10 @@ print(metadata['columns'])
 
 **Возвращает**: `dict` с метаданными (columns, description, etc.)
 
-### 6. `uma_list_entities()`
+### 6. `uma.entity_list()`
 
 ```python
-from namerec.uma import uma_list_entities
-
-entities = await uma_list_entities(
+entities = await uma.entity_list(
     user_context=current_user,
     namespace='virtual',  # Optional filter
 )
@@ -137,13 +127,11 @@ entities = await uma_list_entities(
 
 **Возвращает**: `list[str]` - имена сущностей
 
-### 7. `uma_select()` ✅
+### 7. `uma.select()` ✅
 
 ```python
-from namerec.uma import uma_select
-
 # JSQL query execution
-result = await uma_select(
+result = await uma.select(
     jsql={
         'from': 'users',
         'select': ['id', 'name'],
@@ -176,16 +164,14 @@ result = await uma_select(
 - CTEs, подзапросы, оконные функции
 - Параметризованные запросы
 
-### 8. `get_registry()`
+### 8. `uma.registry`
 
 ```python
-from namerec.uma import get_registry
-
-registry = get_registry()
-registry.register('custom_view', MyViewHandler)
+# Registry доступен как атрибут UMA instance
+uma.registry.register('custom_view', MyViewHandler)
 ```
 
-**Назначение**: Получение инициализированного registry
+**Назначение**: Регистрация виртуальных представлений и кастомных обработчиков
 
 ## Контроль Доступа
 
@@ -227,14 +213,14 @@ admin = User(1, 'admin')
 user = User(2, 'user')
 
 # Админ может всё
-await uma_save('users', {'name': 'Admin'}, user_context=admin)
+await uma.save('users', {'name': 'Admin'}, user_context=admin)
 
 # Пользователь только читать
-user_data = await uma_read('users', 1, user_context=user)
+user_data = await uma.read('users', 1, user_context=user)
 
 # Пользователь не может писать
 try:
-    await uma_save('users', {'name': 'Hack'}, user_context=user)
+    await uma.save('users', {'name': 'Hack'}, user_context=user)
 except UMAAccessDeniedError:
     print("Доступ запрещён!")
 ```
@@ -300,18 +286,18 @@ uv run pytest tests/test_api.py -v
 ### Реализовано ✅
 
 - [x] Базовая инфраструктура (handlers, registry, context)
-- [x] API функции (read, save, delete, meta, list)
+- [x] UMA класс с методами (read, save, delete, entity_details, entity_list, select)
 - [x] Контроль доступа через `can()` метод
 - [x] User context поддержка
-- [x] Namespace поддержка
+- [x] Namespace поддержка (через NamespaceConfig)
+- [x] JSQL парсер и executor
+- [x] Кэширование запросов
 - [x] Примеры и тесты
 - [x] Документация
 
 ### Не Реализовано (будущее)
 
-- [ ] JSQL парсер (uma_select полноценный)
 - [ ] Many-to-many поддержка
-- [ ] Кэширование результатов
 - [ ] Оптимизация производительности
 - [ ] Расширенные метаданные (constraints, indexes)
 
@@ -333,17 +319,19 @@ uv run python examples/api_usage.py
 
 ## Заключение
 
-API-слой полностью реализован согласно спецификации в `docs/20260104-142932-log-impl_proposal-entity_handlers.md`:
+API-слой полностью реализован:
 
-✅ `initialize_uma()` - инициализация  
-✅ `uma_read()` - чтение  
-✅ `uma_save()` - создание/обновление  
-✅ `uma_delete()` - удаление  
-✅ `uma_meta()` - метаданные  
-✅ `uma_list_entities()` - список сущностей  
-✅ `uma_select()` - placeholder для JSQL  
+✅ `UMA.create()` - инициализация  
+✅ `uma.read()` - чтение  
+✅ `uma.save()` - создание/обновление  
+✅ `uma.delete()` - удаление  
+✅ `uma.entity_details()` - метаданные  
+✅ `uma.entity_list()` - список сущностей  
+✅ `uma.select()` - JSQL запросы  
 ✅ Контроль доступа через `can()`  
 ✅ User context поддержка  
+✅ Namespace поддержка через NamespaceConfig  
+✅ Кэширование запросов  
 ✅ Примеры и тесты  
 
 Проект готов к использованию!
