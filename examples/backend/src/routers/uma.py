@@ -3,6 +3,7 @@
 import structlog
 from fastapi import APIRouter
 from fastapi import Depends
+from sqlalchemy import text
 
 from namerec.uma import UMA
 from namerec.uma.jsql.converter import jsql_to_sql
@@ -264,11 +265,17 @@ async def test_connection_endpoint(
     """
     Test database connection and reflection.
     
+    Available only in debug mode for security.
+    
     Returns:
         Connection test results
     """
+    from src.config import settings
     from src.dependencies import container
-    from sqlalchemy import text
+    
+    # Only allow in debug mode
+    if not settings.debug_mode:
+        return {'error': 'This endpoint is only available in debug mode'}
     
     results = {}
     
@@ -281,6 +288,9 @@ async def test_connection_endpoint(
             results['engine_test'] = f'Success: {value}'
     except Exception as e:
         results['engine_test'] = f'Error: {e}'
+        if settings.debug_mode:
+            import traceback
+            results['engine_traceback'] = traceback.format_exc()
     
     try:
         # Test UMA select
@@ -291,7 +301,8 @@ async def test_connection_endpoint(
         results['uma_test'] = f'Success: {len(result.get("data", []))} rows'
     except Exception as e:
         results['uma_test'] = f'Error: {e}'
-        import traceback
-        results['uma_traceback'] = traceback.format_exc()
+        if settings.debug_mode:
+            import traceback
+            results['uma_traceback'] = traceback.format_exc()
     
     return results

@@ -53,9 +53,9 @@ class JSQLExecutor:
         if 'from' not in jsql:
             raise ValueError("JSQL must contain 'from' field")
 
-        # Parse query - returns AST and config (namespace already validated)
+        # Parse query - returns AST, config, and parameter mapping (namespace already validated)
         parser = JSQLParser(namespace_configs)
-        sql_query, config = await parser.parse(jsql, params)
+        sql_query, config, param_mapping = await parser.parse(jsql, params)
 
         # Try cache (namespace already in jsql, so cache key is unique)
         # Cache key depends on JSQL structure and user context, NOT on parameter values
@@ -69,13 +69,11 @@ class JSQLExecutor:
 
             if cached:
                 # Check access to SELECT entities (even for cached queries!)
-                for select_entity in cached.entities:
-                    check_access(
-                        metadata_provider=config.metadata_provider,
-                        entity_name=select_entity,
-                        operation=Operation.SELECT,
-                        user_context=user_context,
-                    )
+                cls._check_select_access(
+                    entities=cached.entities,
+                    metadata_provider=config.metadata_provider,
+                    user_context=user_context,
+                )
                 # Execute cached SQL
                 debug_sql = None
                 if jsql.get('debug', False):
@@ -85,15 +83,13 @@ class JSQLExecutor:
                 # Cached SQL may have parameter placeholders (for queries with params)
                 # or embedded literal values (for queries without params)
                 # Map JSQL parameter names to SQL parameter names and execute
-                # If params_mapping is empty, query has no parameters (all literals)
+                # params_mapping maps JSQL param names to SQL param names (bindparam keys)
                 if cached.params_mapping and params:
-                    # Map JSQL param names to SQL param names
-                    # params_mapping maps JSQL param names to SQL param names (from bindparam)
-                    # Since we use bindparam(param_name), SQL param name should match JSQL param name
+                    # Build SQL parameters dict using cached mapping
+                    # Since we use key=param_name in bindparam(), SQL param name matches JSQL param name
                     sql_params = {}
                     for jsql_param_name, sql_param_name in cached.params_mapping.items():
                         if jsql_param_name in params:
-                            # Use SQL param name (may differ from JSQL name if SQLAlchemy renamed it)
                             sql_params[sql_param_name] = params[jsql_param_name]
                     result = await cls._execute_cached_query(cached.sql, sql_params, config.engine, debug_sql)
                 else:
@@ -106,18 +102,16 @@ class JSQLExecutor:
         select_entities = extract_select_entities_from_ast(sql_query, from_entity)
 
         # Check access to all SELECT entities
-        for select_entity in select_entities:
-            check_access(
-                metadata_provider=config.metadata_provider,
-                entity_name=select_entity,
-                operation=Operation.SELECT,
-                user_context=user_context,
-            )
+        cls._check_select_access(
+            entities=select_entities,
+            metadata_provider=config.metadata_provider,
+            user_context=user_context,
+        )
 
         # Execute
         debug_sql = None
         if jsql.get('debug', False):
-            debug_sql = cls._compile_query_to_sql(sql_query)
+            debug_sql = cls._compile_query_to_sql(sql_query, config.engine)
 
         # Execute query with parameterized queries for security (handled in _execute_query)
         # Parameters use bindparam() and are passed separately, preventing SQL injection
@@ -129,38 +123,59 @@ class JSQLExecutor:
             try:
                 # Compile query WITHOUT literal_binds to get SQL with parameter placeholders
                 # This allows caching queries with parameters - SQL is cached, values are passed at execution
-                if hasattr(config.engine, 'sync_engine'):
-                    compiled = sql_query.compile(bind=config.engine.sync_engine)
-                else:
-                    compiled = sql_query.compile(dialect=config.engine.dialect)
+                compiled = JSQLExecutor._compile_query(sql_query, config.engine, literal_binds=False)
                 
-                # Extract parameter mapping: JSQL param names -> SQL param names
-                # compiled.params contains SQLAlchemy-generated parameter names (e.g., 'param_1', 'param_2')
-                # We need to map them back to JSQL parameter names
-                params_mapping = {}
-                if compiled.params:
-                    # Extract bindparam names from query and map to SQL parameter names
-                    # SQLAlchemy uses sequential names like 'param_1', 'param_2' for bindparam()
-                    # We need to preserve the original JSQL parameter names
-                    # For now, we'll use the compiled.params keys directly
-                    # TODO: Improve mapping to preserve original JSQL param names
-                    params_mapping = {name: name for name in compiled.params.keys()}
+                # Use parameter mapping from parser (JSQL param name -> SQL param name)
+                # Since we use key=param_name in bindparam(), the mapping should preserve names
+                # param_mapping is already in the format: {jsql_name: sql_name}
                 
                 # Cache SQL with parameter placeholders
                 # If query has no parameters, SQL will have embedded literal values
-                # If query has parameters, SQL will have placeholders (e.g., $1, $2 or :param_1)
+                # If query has parameters, SQL will have placeholders (e.g., $1, $2 or :param_name)
                 cached_query = CachedQuery(
                     sql=str(compiled),
-                    params_mapping=params_mapping,  # Map JSQL param names to SQL param names
+                    params_mapping=param_mapping,  # Map JSQL param names to SQL param names (bindparam keys)
                     dialect=config.engine.dialect.name,
                     entities=select_entities,
                 )
                 cache_backend.set(cache_key, cached_query)
-            except Exception:
-                # If compilation fails, skip caching
-                pass
+            except Exception as e:
+                # Log compilation errors but don't fail the query
+                import structlog
+                logger = structlog.get_logger()
+                logger.warning(
+                    'Failed to cache query',
+                    cache_key=cache_key,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
 
         return result
+
+    @staticmethod
+    def _check_select_access(
+        entities: list[str],
+        metadata_provider: Any,
+        user_context: Any,
+    ) -> None:
+        """
+        Check access to SELECT entities.
+
+        Args:
+            entities: List of entity names to check
+            metadata_provider: Metadata provider for access control
+            user_context: User context for permission checks
+
+        Raises:
+            UMAAccessDeniedError: If access denied to any entity
+        """
+        for select_entity in entities:
+            check_access(
+                metadata_provider=metadata_provider,
+                entity_name=select_entity,
+                operation=Operation.SELECT,
+                user_context=user_context,
+            )
 
     @staticmethod
     async def _execute_query(sql_query: Select, params: dict | None, engine: Engine, debug_sql: str | None = None) -> QueryResult:
@@ -215,22 +230,58 @@ class JSQLExecutor:
             await conn.close()
 
     @staticmethod
-    def _compile_query_to_sql(query: Select) -> str:
-        """Compile SQLAlchemy query to SQL string for debug output."""
+    def _compile_query(
+        sql_query: Select,
+        engine: Engine,
+        literal_binds: bool = False,
+    ) -> Any:
+        """
+        Compile SQLAlchemy query to compiled SQL.
+
+        Args:
+            sql_query: SQLAlchemy Select statement
+            engine: Database engine (async or sync)
+            literal_binds: Whether to embed literal values in SQL (for debug output)
+
+        Returns:
+            Compiled SQL object
+        """
+        compile_kwargs = {'literal_binds': literal_binds} if literal_binds else {}
+        
+        if hasattr(engine, 'sync_engine'):
+            # Async engine - use sync_engine for compilation
+            return sql_query.compile(bind=engine.sync_engine, compile_kwargs=compile_kwargs)
+        else:
+            # Sync engine - use dialect
+            return sql_query.compile(dialect=engine.dialect, compile_kwargs=compile_kwargs)
+
+    @staticmethod
+    def _compile_query_to_sql(query: Select, engine: Engine | None = None) -> str:
+        """
+        Compile SQLAlchemy query to SQL string for debug output.
+
+        Args:
+            query: SQLAlchemy Select statement
+            engine: Optional engine for compilation context
+        """
         import sqlparse
 
         try:
             # Try to compile with literal binds first (substitute parameters)
-            # For async engines, use sync_engine if available
             try:
-                # Try to get engine from query context if available
-                # Otherwise use default compilation
-                compiled = query.compile(compile_kwargs={'literal_binds': True})
+                if engine:
+                    compiled = JSQLExecutor._compile_query(query, engine, literal_binds=True)
+                else:
+                    # Fallback: try to compile without engine context
+                    compiled = query.compile(compile_kwargs={'literal_binds': True})
                 sql_str = str(compiled)
             except (TypeError, ValueError, AttributeError):
                 # Fallback: compile without literal binds if it fails
                 # (some dialects or parameter types don't support literal_binds)
-                compiled = query.compile()
+                if engine:
+                    compiled = JSQLExecutor._compile_query(query, engine, literal_binds=False)
+                else:
+                    compiled = query.compile()
                 sql_str = str(compiled)
 
             # Format SQL for readability

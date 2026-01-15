@@ -28,8 +28,9 @@ class Container(containers.DeclarativeContainer):
     metadata_provider = providers.Singleton(DefaultMetadataProvider)
 
     # UMA application instance (initialized once at startup)
-    # Cache enabled - queries are compiled with literal_binds=True when cached
-    # Parameters are included in cache key to ensure different values use different cache entries
+    # Cache enabled - queries are compiled WITHOUT literal_binds=True
+    # SQL with parameter placeholders is cached and reused with different parameter values
+    # Cache key depends only on JSQL structure and user context, not parameter values
     uma_app = providers.Singleton(
         lambda engine, provider: UMA.create(
             {
@@ -38,7 +39,7 @@ class Container(containers.DeclarativeContainer):
                     metadata_provider=provider,
                 ),
             },
-            # Cache will use literal_binds=True, so cached SQL has embedded values
+            # Cache stores SQL with parameter placeholders for parameterized queries
         ),
         engine=engine,
         provider=metadata_provider,

@@ -10,7 +10,7 @@ from typing import Any
 def make_cache_key(
     jsql: dict[str, Any],
     user_context: Any = None,
-    params: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,  # Deprecated: not used in cache key
 ) -> str:
     """
     Create cache key for JSQL query.
@@ -23,7 +23,7 @@ def make_cache_key(
     Args:
         jsql: JSQL query dictionary (contains namespace in FROM clause)
         user_context: User context (affects permissions/query results)
-        params: Query parameters (deprecated - not used in cache key)
+        params: Query parameters (deprecated - kept for backward compatibility, not used in cache key)
 
     Returns:
         Cache key (compact hash)

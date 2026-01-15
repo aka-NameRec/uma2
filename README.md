@@ -145,6 +145,50 @@ async def main():
 asyncio.run(main())
 ```
 
+### Query Parameters
+
+JSQL supports parameterized queries for security and performance. Parameters use `{"param": "name"}` syntax and values are passed separately:
+
+```python
+# JSQL query with parameter
+jsql = {
+    "from": "orders",
+    "select": ["id", "amount"],
+    "where": {
+        "op": ">=",
+        "left": {"field": "amount"},
+        "right": {"param": "min_amount"}  # Parameter reference
+    }
+}
+
+# Pass parameter values separately
+params = {"min_amount": 100}
+result = await uma.select(jsql, params=params)
+```
+
+**Key benefits:**
+- **Security**: Parameters are bound using SQLAlchemy's parameterized queries, preventing SQL injection
+- **Caching**: SQL with parameter placeholders is cached once and reused with different parameter values
+- **Performance**: Database can optimize parameterized queries better than literal values
+
+**Multiple parameters:**
+```python
+jsql = {
+    "from": "orders",
+    "select": ["id", "amount"],
+    "where": {
+        "op": "AND",
+        "conditions": [
+            {"op": ">=", "left": {"field": "amount"}, "right": {"param": "min_amount"}},
+            {"op": "<=", "left": {"field": "amount"}, "right": {"param": "max_amount"}}
+        ]
+    }
+}
+
+params = {"min_amount": 50, "max_amount": 200}
+result = await uma.select(jsql, params=params)
+```
+
 ### Debug Mode
 
 ```python

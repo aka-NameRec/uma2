@@ -54,6 +54,8 @@ class JSQLParser:
         self.alias_manager = AliasManager()  # Manages table/column aliases
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
         self._param_counter = 0  # Counter for generating unique parameter names
+        # Map JSQL parameter names to bindparam objects for proper parameter mapping
+        self._param_bindparams: dict[str, Any] = {}  # JSQL param name -> bindparam object
 
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
@@ -68,7 +70,7 @@ class JSQLParser:
             JSQLOperator.LIKE: self._handle_like,
         }
 
-    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig]:
+    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig, dict[str, str]]:
         """
         Parse JSQL query into SQLAlchemy Select statement and namespace config.
 
@@ -77,7 +79,8 @@ class JSQLParser:
             params: Query parameters
 
         Returns:
-            Tuple of (SQLAlchemy Select statement, NamespaceConfig)
+            Tuple of (SQLAlchemy Select statement, NamespaceConfig, param_mapping)
+            param_mapping: Dictionary mapping JSQL parameter names to SQL parameter names
 
         Raises:
             JSQLSyntaxError: If JSQL syntax is invalid
@@ -86,6 +89,8 @@ class JSQLParser:
         self.params = params or {}
         # Reset parameter counter for each parse to ensure unique parameter names
         self._param_counter = 0
+        # Reset parameter bindparam mapping for each parse
+        self._param_bindparams = {}
 
         # Parse CTEs if present
         if with_spec := jsql.get(JSQLField.WITH.value):
@@ -100,7 +105,11 @@ class JSQLParser:
         # Get namespace config (already validated in get_namespace_config)
         config = self.get_namespace_config(namespace)
 
-        return query, config
+        # Build parameter mapping: JSQL param name -> SQL param name (bindparam.key)
+        # Since we use key=param_name in bindparam(), the key should match the JSQL param name
+        param_mapping = {jsql_name: bindparam_obj.key for jsql_name, bindparam_obj in self._param_bindparams.items()}
+
+        return query, config, param_mapping
 
     async def _parse_ctes(self, ctes: list[dict[str, Any]]) -> None:
         """
@@ -757,15 +766,18 @@ class JSQLParser:
         if param_name := expr_spec.get(JSQLField.PARAM.value):
             if param_name not in self.params:
                 raise JSQLSyntaxError(f'Parameter "{param_name}" not provided')
-            # Use bindparam() for parameterized queries to prevent SQL injection
-            # Pass value=None to bindparam, so value is provided at execution time
-            # This ensures values are passed as parameters, not embedded in SQL
-            if expected_type is not None:
-                # Use bindparam with type annotation for proper type handling
-                # Value will be provided at execution time from self.params
-                return bindparam(param_name, value=None, type_=expected_type)
+            # Use bindparam() with explicit key to preserve JSQL parameter name
+            # This ensures SQLAlchemy preserves the parameter name and we can map it correctly
             # Value will be provided at execution time from self.params
-            return bindparam(param_name, value=None)
+            if expected_type is not None:
+                # Use bindparam with type annotation and explicit key for proper type handling
+                param_bind = bindparam(param_name, value=None, type_=expected_type, key=param_name)
+            else:
+                # Use bindparam with explicit key to preserve parameter name
+                param_bind = bindparam(param_name, value=None, key=param_name)
+            # Store mapping: JSQL param name -> bindparam object for later use in executor
+            self._param_bindparams[param_name] = param_bind
+            return param_bind
 
         # Function call
         if JSQLField.FUNC.value in expr_spec:

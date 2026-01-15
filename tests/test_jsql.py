@@ -362,6 +362,134 @@ async def test_query_parameters(uma):
 
 
 @pytest.mark.asyncio
+async def test_query_parameters_different_values(uma):
+    """Test query with parameters - different values should use same cached SQL."""
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    from namerec.uma.application import UMA
+    
+    # Create UMA with cache
+    cache_backend = MemoryCacheBackend(max_size=10)
+    
+    # Get engine from uma instance (assuming it has one)
+    # We'll create a new UMA instance with cache for this test
+    # This is a simplified version - in real scenario you'd use the fixture engine
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    orders_table = Table(
+        'orders',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('amount', Numeric(10, 2), nullable=False),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        await conn.execute(
+            orders_table.insert(),
+            [
+                {'id': 1, 'amount': 100.00},
+                {'id': 2, 'amount': 250.00},
+                {'id': 3, 'amount': 75.50},
+            ],
+        )
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    jsql = {
+        'from': 'orders',
+        'select': ['id', 'amount'],
+        'where': {
+            'op': '>=',
+            'left': {'field': 'amount'},
+            'right': {'param': 'min_amount'},
+        },
+    }
+    
+    # First query with min_amount=100 - should cache SQL
+    result1 = await uma_cached.select(jsql, params={'min_amount': 100})
+    stats1 = uma_cached.cache_stats()
+    assert stats1['misses'] == 1
+    assert len(result1['data']) == 2  # Orders with amount >= 100
+    
+    # Second query with different min_amount=200 - should use cached SQL
+    result2 = await uma_cached.select(jsql, params={'min_amount': 200})
+    stats2 = uma_cached.cache_stats()
+    assert stats2['hits'] == 1  # Should hit cache
+    assert len(result2['data']) == 1  # Only order with amount >= 200
+    
+    # Third query with same params as first - should hit cache again
+    result3 = await uma_cached.select(jsql, params={'min_amount': 100})
+    stats3 = uma_cached.cache_stats()
+    assert stats3['hits'] == 2  # Another cache hit
+    assert len(result3['data']) == 2
+    
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_parameter_mapping_preservation(uma):
+    """Test that JSQL parameter names are preserved in parameter mapping."""
+    jsql = {
+        'from': 'orders',
+        'select': ['id'],
+        'where': {
+            'op': 'AND',
+            'conditions': [
+                {
+                    'op': '>=',
+                    'left': {'field': 'amount'},
+                    'right': {'param': 'min_amount'},
+                },
+                {
+                    'op': '<=',
+                    'left': {'field': 'amount'},
+                    'right': {'param': 'max_amount'},
+                },
+            ],
+        },
+    }
+    
+    # Query with multiple parameters
+    params = {'min_amount': 50, 'max_amount': 200}
+    result = await uma.select(jsql, params)
+    
+    # Should return orders with amount between 50 and 200
+    # We have orders: 100.00, 250.00, 75.50
+    # So should get: 100.00, 75.50 (2 orders)
+    assert len(result['data']) == 2
+
+
+@pytest.mark.asyncio
+async def test_parameter_missing_error(uma):
+    """Test error when required parameter is missing."""
+    jsql = {
+        'from': 'orders',
+        'select': ['id'],
+        'where': {
+            'op': '>=',
+            'left': {'field': 'amount'},
+            'right': {'param': 'min_amount'},
+        },
+    }
+    
+    # Query without required parameter
+    from namerec.uma.jsql.exceptions import JSQLSyntaxError
+    with pytest.raises(JSQLSyntaxError, match='Parameter.*not provided'):
+        await uma.select(jsql, params={})
+
+
+@pytest.mark.asyncio
 async def test_invalid_jsql_missing_from(uma):
     """Test error handling for missing 'from' field."""
     jsql = {
