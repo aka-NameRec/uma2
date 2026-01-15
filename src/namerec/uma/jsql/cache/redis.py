@@ -91,15 +91,25 @@ class RedisCacheBackend:
                 break
 
     def stats(self) -> dict[str, Any]:
-        """Get cache statistics from Redis."""
+        """
+        Get cache statistics from Redis.
+
+        WARNING: This method performs a full SCAN operation to count cached queries,
+        which can be expensive and block the Redis server for large caches.
+        Use only for debugging or monitoring purposes, NOT in production hot paths.
+
+        For production monitoring, consider:
+        - Using Redis INFO command for approximate statistics
+        - Implementing a dedicated size counter key (updated on set/delete)
+        - Using Redis monitoring tools (RedisInsight, prometheus-redis-exporter)
+        """
         hits = int(self._redis.get(self._hits_key) or 0)
         misses = int(self._redis.get(self._misses_key) or 0)
         total = hits + misses
 
         # Count cached queries (expensive for large caches)
+        # WARNING: Full SCAN - slow for large databases, use sparingly!
         pattern = f'{self._prefix}*'
-        # Approximate size using DBSIZE (includes all keys, not just ours)
-        # For exact count, would need to scan all keys
         size = 0
         cursor = 0
         while True:
