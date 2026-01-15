@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         """Pydantic settings configuration."""
 
         env_file = '.env'
+        env_file_encoding = 'utf-8'
         case_sensitive = False
 
 

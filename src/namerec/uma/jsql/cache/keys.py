@@ -10,25 +10,33 @@ from typing import Any
 def make_cache_key(
     jsql: dict[str, Any],
     user_context: Any = None,
+    params: dict[str, Any] | None = None,
 ) -> str:
     """
     Create cache key for JSQL query.
 
     Includes user context hash to handle different permissions per user.
+    Does NOT include parameter values - same JSQL structure uses same cached SQL.
+    Parameter values are passed at execution time, allowing one SQL to be reused.
     Namespace is already in jsql dict (in FROM clause), so no need to pass separately.
 
     Args:
         jsql: JSQL query dictionary (contains namespace in FROM clause)
         user_context: User context (affects permissions/query results)
+        params: Query parameters (deprecated - not used in cache key)
 
     Returns:
         Cache key (compact hash)
 
     Example:
-        >>> jsql = {"from": "users", "select": ["id", "name"]}
+        >>> jsql = {"from": "users", "select": ["id", "name"], "where": {"op": ">=", "left": {"field": "created"}, "right": {"param": "date"}}}
         >>> key1 = make_cache_key(jsql, {"role": "admin"})
         >>> key2 = make_cache_key(jsql, {"role": "user"})
         >>> key1 != key2  # Different users = different cache keys
+        True
+        >>> key3 = make_cache_key(jsql, None)
+        >>> key4 = make_cache_key(jsql, None)  # Same JSQL structure
+        >>> key3 == key4  # Same cache key - SQL will be reused with different param values
         True
     """
     # Stable JSON representation (includes namespace from FROM clause)
@@ -44,7 +52,12 @@ def make_cache_key(
     else:
         context_str = ""
 
-    # Combine all components
+    # Note: params are NOT included in cache key
+    # Same JSQL structure (with same parameter names) should use same cached SQL
+    # Parameter values are passed at execution time, not at cache key generation time
+    # This allows caching SQL with placeholders and reusing it with different parameter values
+
+    # Combine all components (without params)
     cache_input = f"{jsql_str}|{context_str}"
 
     # Use BLAKE2b for fast, secure hashing (16 bytes = 32 hex chars)

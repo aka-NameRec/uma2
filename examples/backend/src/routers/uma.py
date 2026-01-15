@@ -255,3 +255,43 @@ async def jsql2sql_endpoint(request: JSQL2SQLRequest) -> dict:
 
     logger.info('JSQL to SQL completed')
     return {'sql': sql}
+
+
+@router.get('/test/connection')
+async def test_connection_endpoint(
+    uma: UMA = Depends(get_uma),
+) -> dict:
+    """
+    Test database connection and reflection.
+    
+    Returns:
+        Connection test results
+    """
+    from src.dependencies import container
+    from sqlalchemy import text
+    
+    results = {}
+    
+    try:
+        # Test engine directly
+        engine = container.engine()
+        async with engine.connect() as conn:
+            result = await conn.execute(text('SELECT 1 as test'))
+            value = result.scalar()
+            results['engine_test'] = f'Success: {value}'
+    except Exception as e:
+        results['engine_test'] = f'Error: {e}'
+    
+    try:
+        # Test UMA select
+        result = await uma.select(
+            jsql={"select": ["id"], "from": "plainter_case", "limit": 1},
+            user_context={"user_id": 1, "role": "admin"}
+        )
+        results['uma_test'] = f'Success: {len(result.get("data", []))} rows'
+    except Exception as e:
+        results['uma_test'] = f'Error: {e}'
+        import traceback
+        results['uma_traceback'] = traceback.format_exc()
+    
+    return results

@@ -53,6 +53,7 @@ class JSQLParser:
         self.ctes: dict[str, Select] = {}  # CTEs by name (for SQLAlchemy queries)
         self.alias_manager = AliasManager()  # Manages table/column aliases
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
+        self._param_counter = 0  # Counter for generating unique parameter names
 
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
@@ -83,6 +84,8 @@ class JSQLParser:
             ValueError: If namespace not found or no default available
         """
         self.params = params or {}
+        # Reset parameter counter for each parse to ensure unique parameter names
+        self._param_counter = 0
 
         # Parse CTEs if present
         if with_spec := jsql.get(JSQLField.WITH.value):
@@ -585,9 +588,9 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
 
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        # Extract type from left expression to use for right expression
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        # Don't pass expected_type - let SQLAlchemy infer type from comparison context
+        # This allows simple ISO date strings to work without explicit CAST
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
 
         # Use match-case for operator dispatch
         match op:
@@ -743,19 +746,26 @@ class JSQLParser:
 
         # Literal value
         if (value := expr_spec.get(JSQLField.VALUE.value)) is not None:
-            if expected_type is not None:
-                # Use cast() for explicit type conversion to avoid VARCHAR casting issues
-                return cast(literal(value), expected_type)
+            # Use plain literal without type annotation
+            # With literal_binds=True, values are embedded directly in SQL as strings
+            # PostgreSQL will automatically handle type conversion when comparing with typed columns
+            # This allows simple ISO date strings like "2025-12-18T00:00:00+00:00" to work
+            # without explicit CAST or type conversion
             return literal(value)
 
-        # Parameter - use walrus operator
+        # Parameter - use bindparam for security (parameterized queries)
         if param_name := expr_spec.get(JSQLField.PARAM.value):
             if param_name not in self.params:
                 raise JSQLSyntaxError(f'Parameter "{param_name}" not provided')
-            # Use cast() for explicit type conversion when expected_type is available
+            # Use bindparam() for parameterized queries to prevent SQL injection
+            # Pass value=None to bindparam, so value is provided at execution time
+            # This ensures values are passed as parameters, not embedded in SQL
             if expected_type is not None:
-                return cast(literal(self.params[param_name]), expected_type)
-            return literal(self.params[param_name])
+                # Use bindparam with type annotation for proper type handling
+                # Value will be provided at execution time from self.params
+                return bindparam(param_name, value=None, type_=expected_type)
+            # Value will be provided at execution time from self.params
+            return bindparam(param_name, value=None)
 
         # Function call
         if JSQLField.FUNC.value in expr_spec:

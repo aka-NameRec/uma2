@@ -35,12 +35,47 @@ async def lifespan(app: FastAPI):  # noqa: ANN201, ARG001
     """
     # Startup
     logger.info('Starting UMA backend demo', debug_mode=settings.debug_mode)
+    
+    # Log database URL (without password for security)
+    db_url_safe = settings.database_url.split('@')[-1] if '@' in settings.database_url else '***'
+    logger.info('Database URL configured', database=db_url_safe)
 
-    # Configure DI container
+    # Configure DI container - MUST be done before any engine access
     container.config.database_url.from_value(settings.database_url)
+    
+    # Verify configuration is set
+    configured_url = container.config.database_url()
+    if not configured_url:
+        raise ValueError('Database URL is not configured')
+    
+    logger.info('Database URL verified in container', url_set=bool(configured_url))
 
     # Initialize UMA application
-    container.uma_app()
+    # Note: Engine is created lazily when first accessed, after database_url is set
+    # UMA instance creation will trigger engine creation through dependency injection
+    try:
+        uma_instance = container.uma_app()
+        logger.info('UMA instance created successfully')
+        
+        # Verify engine was created correctly by accessing it
+        test_engine = container.engine()
+        logger.info('Engine verified', engine_type=type(test_engine).__name__, url_set=bool(str(test_engine.url)))
+        
+        # Test engine connection to ensure it works (using current event loop)
+        from sqlalchemy import text
+        try:
+            async with test_engine.connect() as conn:
+                result = await conn.execute(text('SELECT 1'))
+                value = result.scalar()
+                logger.info('Engine connection test successful', test_value=value)
+        except Exception as conn_error:
+            logger.error('Engine connection test failed', error=str(conn_error), error_type=type(conn_error).__name__)
+            raise
+    except Exception as e:
+        logger.error('Failed to initialize UMA', error=str(e), error_type=type(e).__name__)
+        import traceback
+        logger.error('Traceback', traceback=traceback.format_exc())
+        raise
 
     # Optionally preload metadata for production
     # await container.metadata_provider().preload(
