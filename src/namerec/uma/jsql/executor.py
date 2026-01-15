@@ -3,7 +3,19 @@
 from collections.abc import Mapping
 from typing import Any
 
+try:
+    import sqlparse
+except ImportError:
+    sqlparse = None  # type: ignore[assignment]
+
+try:
+    import structlog
+except ImportError:
+    structlog = None  # type: ignore[assignment]
+
 from sqlalchemy import Engine
+from sqlalchemy import text
+from sqlalchemy.engine import Compiled
 from sqlalchemy.sql.expression import Select
 
 from namerec.uma.core.access import check_access
@@ -15,6 +27,7 @@ from namerec.uma.jsql.cache.protocol import CacheBackend
 from namerec.uma.jsql.entity_extractor import extract_select_entities_from_ast
 from namerec.uma.jsql.exceptions import JSQLExecutionError
 from namerec.uma.jsql.parser import JSQLParser
+from namerec.uma.jsql.result import JSQLResultBuilder
 from namerec.uma.jsql.types import QueryResult
 
 
@@ -75,10 +88,10 @@ class JSQLExecutor:
                     user_context=user_context,
                 )
                 # Execute cached SQL
-                debug_sql = None
-                if jsql.get('debug', False):
-                    # For cached queries, format the cached SQL
-                    import sqlparse
+                # Use cached debug_sql if available, otherwise format on demand
+                debug_sql = cached.debug_sql
+                if jsql.get('debug', False) and not debug_sql and sqlparse:
+                    # Format cached SQL for debug if not already cached
                     debug_sql = sqlparse.format(cached.sql, reindent=True, keyword_case='upper')
                 # Cached SQL may have parameter placeholders (for queries with params)
                 # or embedded literal values (for queries without params)
@@ -137,18 +150,19 @@ class JSQLExecutor:
                     params_mapping=param_mapping,  # Map JSQL param names to SQL param names (bindparam keys)
                     dialect=config.engine.dialect.name,
                     entities=select_entities,
+                    debug_sql=debug_sql,  # Cache debug SQL to avoid recompilation
                 )
                 cache_backend.set(cache_key, cached_query)
             except Exception as e:
                 # Log compilation errors but don't fail the query
-                import structlog
-                logger = structlog.get_logger()
-                logger.warning(
-                    'Failed to cache query',
-                    cache_key=cache_key,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
+                if structlog:
+                    logger = structlog.get_logger()
+                    logger.warning(
+                        'Failed to cache query',
+                        cache_key=cache_key,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
 
         return result
 
@@ -186,8 +200,6 @@ class JSQLExecutor:
         Parameters from bindparam() are passed separately, not embedded in SQL.
         This prevents SQL injection attacks by ensuring user input is treated as data, not code.
         """
-        from namerec.uma.jsql.result import JSQLResultBuilder
-
         conn = await engine.connect()
         try:
             # Execute query directly with parameter binding
@@ -215,26 +227,38 @@ class JSQLExecutor:
         Returns:
             QueryResult with data (metadata may be limited for cached queries)
         """
-        from sqlalchemy import text
-
         conn = await engine.connect()
         try:
             # Execute cached SQL with parameter binding
             # If SQL has placeholders (e.g., $1, $2), params will be bound to them
             # If SQL has embedded literals (no placeholders), params will be empty
             result = await conn.execute(text(sql), params or {})
-            # For cached queries, metadata is not available (we don't have the original query AST)
-            data = [list(row) for row in result]
-            return QueryResult(meta=[], data=data, debug=debug_sql)
+            return JSQLExecutor._format_cached_result(result, debug_sql)
         finally:
             await conn.close()
+
+    @staticmethod
+    def _format_cached_result(result: Any, debug_sql: str | None = None) -> QueryResult:
+        """
+        Format cached query result.
+        
+        Args:
+            result: SQLAlchemy result object
+            debug_sql: Optional debug SQL string
+            
+        Returns:
+            QueryResult with data (metadata may be limited for cached queries)
+        """
+        # For cached queries, metadata is not available (we don't have the original query AST)
+        data = [list(row) for row in result]
+        return QueryResult(meta=[], data=data, debug=debug_sql)
 
     @staticmethod
     def _compile_query(
         sql_query: Select,
         engine: Engine,
         literal_binds: bool = False,
-    ) -> Any:
+    ) -> Compiled:
         """
         Compile SQLAlchemy query to compiled SQL.
 
@@ -264,8 +288,6 @@ class JSQLExecutor:
             query: SQLAlchemy Select statement
             engine: Optional engine for compilation context
         """
-        import sqlparse
-
         try:
             # Try to compile with literal binds first (substitute parameters)
             try:
@@ -285,8 +307,10 @@ class JSQLExecutor:
                 sql_str = str(compiled)
 
             # Format SQL for readability
-            return sqlparse.format(sql_str, reindent=True, keyword_case='upper')
-        except (ImportError, AttributeError, TypeError) as e:
+            if sqlparse:
+                return sqlparse.format(sql_str, reindent=True, keyword_case='upper')
+            return sql_str
+        except (AttributeError, TypeError) as e:
             # Debug mode should never break query execution
             # Catch formatting errors (sqlparse import issues, formatting errors)
             return f'-- Failed to generate debug SQL: {e!s}'

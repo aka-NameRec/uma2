@@ -109,6 +109,7 @@ class CachedQuery:
     params_mapping: dict[str, str]  # JSQL param names -> SQL param names
     dialect: str  # SQL dialect (postgresql, mysql, etc.)
     entities: list[str] = field(default_factory=list)  # Entities in SELECT clause
+    debug_sql: str | None = None  # Formatted SQL for debug output (optional)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for Redis storage."""
@@ -117,6 +118,7 @@ class CachedQuery:
             'params_mapping': self.params_mapping,
             'dialect': self.dialect,
             'entities': self.entities,
+            'debug_sql': self.debug_sql,
         }
 
     @classmethod
@@ -127,4 +129,5 @@ class CachedQuery:
             params_mapping=data['params_mapping'],
             dialect=data['dialect'],
             entities=data.get('entities', []),
+            debug_sql=data.get('debug_sql'),
         )

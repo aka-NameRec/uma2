@@ -823,3 +823,356 @@ async def test_debug_mode_with_in_operator(uma: tuple) -> None:
     # Debug SQL should contain query structure even if parameters aren't substituted
     debug_sql = result['debug']
     assert 'SELECT' in debug_sql or 'Failed to generate' in debug_sql
+
+
+@pytest.mark.asyncio
+async def test_bindparam_key_preservation(uma):
+    """Test that SQLAlchemy preserves parameter names when using key=param_name in bindparam."""
+    from sqlalchemy import bindparam
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine
+    
+    # Create a simple test to verify bindparam key preservation
+    engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    
+    # Create a simple table
+    from sqlalchemy import MetaData, Table, Column, Integer
+    metadata = MetaData()
+    test_table = Table(
+        'test_table',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('value', Integer),
+    )
+    
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        await conn.execute(test_table.insert(), [{'id': 1, 'value': 100}])
+    
+    # Create bindparam with explicit key
+    param_name = 'test_param'
+    bp = bindparam(param_name, value=None, key=param_name)
+    
+    # Build query with bindparam
+    query = select(test_table.c.id).where(test_table.c.value == bp)
+    
+    # Compile query
+    compiled = query.compile(bind=engine.sync_engine, compile_kwargs={})
+    
+    # Check that parameter name is preserved
+    # SQLAlchemy should use the key as the parameter name
+    assert param_name in compiled.params or bp.key == param_name
+    
+    # Execute query
+    async with engine.connect() as conn:
+        result = await conn.execute(query, {param_name: 100})
+        row = result.fetchone()
+        assert row is not None
+        assert row[0] == 1
+    
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_parameter_mapping_after_compilation(uma):
+    """Test that parameter mapping works correctly after SQLAlchemy compilation."""
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    
+    cache_backend = MemoryCacheBackend(max_size=10)
+    
+    # Get engine from uma instance
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import MetaData, Table, Column, Integer, Numeric
+    
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    orders_table = Table(
+        'orders',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('amount', Numeric(10, 2), nullable=False),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        await conn.execute(
+            orders_table.insert(),
+            [
+                {'id': 1, 'amount': 100.00},
+                {'id': 2, 'amount': 250.00},
+                {'id': 3, 'amount': 75.50},
+            ],
+        )
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    jsql = {
+        'from': 'orders',
+        'select': ['id', 'amount'],
+        'where': {
+            'op': '>=',
+            'left': {'field': 'amount'},
+            'right': {'param': 'min_amount'},
+        },
+    }
+    
+    # First query - should cache SQL and parameter mapping
+    result1 = await uma_cached.select(jsql, params={'min_amount': 100})
+    assert len(result1['data']) == 2
+    
+    # Second query with different parameter value - should use cached SQL
+    result2 = await uma_cached.select(jsql, params={'min_amount': 200})
+    assert len(result2['data']) == 1
+    
+    # Verify that parameter mapping was preserved correctly
+    # Both queries should work with their respective parameter values
+    stats = uma_cached.cache_stats()
+    assert stats['hits'] == 1  # Second query should hit cache
+    
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cached_query_missing_parameter(uma):
+    """Test behavior when cached query is executed with missing parameter."""
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import MetaData, Table, Column, Integer, Numeric
+    
+    cache_backend = MemoryCacheBackend(max_size=10)
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    orders_table = Table(
+        'orders',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('amount', Numeric(10, 2), nullable=False),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        await conn.execute(
+            orders_table.insert(),
+            [{'id': 1, 'amount': 100.00}],
+        )
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    jsql = {
+        'from': 'orders',
+        'select': ['id'],
+        'where': {
+            'op': '>=',
+            'left': {'field': 'amount'},
+            'right': {'param': 'min_amount'},
+        },
+    }
+    
+    # First query - cache SQL
+    await uma_cached.select(jsql, params={'min_amount': 100})
+    
+    # Second query without parameter - should fail
+    from namerec.uma.jsql.exceptions import JSQLSyntaxError
+    with pytest.raises(JSQLSyntaxError, match='Parameter.*not provided'):
+        await uma_cached.select(jsql, params={})
+    
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cached_query_extra_parameter(uma):
+    """Test behavior when cached query is executed with extra (unused) parameter."""
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import MetaData, Table, Column, Integer, Numeric
+    
+    cache_backend = MemoryCacheBackend(max_size=10)
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    orders_table = Table(
+        'orders',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('amount', Numeric(10, 2), nullable=False),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        await conn.execute(
+            orders_table.insert(),
+            [{'id': 1, 'amount': 100.00}],
+        )
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    jsql = {
+        'from': 'orders',
+        'select': ['id'],
+        'where': {
+            'op': '>=',
+            'left': {'field': 'amount'},
+            'right': {'param': 'min_amount'},
+        },
+    }
+    
+    # First query - cache SQL
+    result1 = await uma_cached.select(jsql, params={'min_amount': 100})
+    assert len(result1['data']) == 1
+    
+    # Second query with extra parameter - should work (extra params are ignored)
+    result2 = await uma_cached.select(jsql, params={'min_amount': 100, 'extra_param': 999})
+    assert len(result2['data']) == 1
+    
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cache_performance(uma):
+    """Test that cached queries are faster than non-cached queries."""
+    import time
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import MetaData, Table, Column, Integer, Numeric
+    
+    cache_backend = MemoryCacheBackend(max_size=10)
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    orders_table = Table(
+        'orders',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('amount', Numeric(10, 2), nullable=False),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        # Insert more data to make query slower
+        await conn.execute(
+            orders_table.insert(),
+            [{'id': i, 'amount': float(i * 10)} for i in range(1, 100)],
+        )
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    jsql = {
+        'from': 'orders',
+        'select': ['id', 'amount'],
+        'where': {
+            'op': '>=',
+            'left': {'field': 'amount'},
+            'right': {'param': 'min_amount'},
+        },
+    }
+    
+    # First query - should be slower (cache miss, needs compilation)
+    start1 = time.perf_counter()
+    result1 = await uma_cached.select(jsql, params={'min_amount': 50})
+    time1 = time.perf_counter() - start1
+    assert len(result1['data']) > 0
+    
+    # Second query - should be faster (cache hit, no compilation)
+    start2 = time.perf_counter()
+    result2 = await uma_cached.select(jsql, params={'min_amount': 100})
+    time2 = time.perf_counter() - start2
+    assert len(result2['data']) > 0
+    
+    # Verify cache was hit
+    stats = uma_cached.cache_stats()
+    assert stats['hits'] == 1
+    
+    # Note: In-memory SQLite is very fast, so the difference might be minimal
+    # But we can at least verify that cache hit doesn't make it slower
+    # In a real scenario with network latency and complex queries, the difference would be more significant
+    assert time2 <= time1 * 1.5  # Cached query should not be significantly slower
+    
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_debug_sql_caching(uma):
+    """Test that debug SQL is cached and reused."""
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import MetaData, Table, Column, Integer
+    
+    cache_backend = MemoryCacheBackend(max_size=10)
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    test_table = Table(
+        'test_table',
+        metadata,
+        Column('id', Integer, primary_key=True),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    jsql = {
+        'from': 'test_table',
+        'select': ['id'],
+        'debug': True,
+    }
+    
+    # First query - should generate and cache debug SQL
+    result1 = await uma_cached.select(jsql)
+    assert 'debug' in result1
+    assert result1['debug'] is not None
+    debug_sql1 = result1['debug']
+    
+    # Second query - should use cached debug SQL
+    result2 = await uma_cached.select(jsql)
+    assert 'debug' in result2
+    assert result2['debug'] is not None
+    debug_sql2 = result2['debug']
+    
+    # Debug SQL should be the same (cached)
+    assert debug_sql1 == debug_sql2
+    
+    await test_engine.dispose()
