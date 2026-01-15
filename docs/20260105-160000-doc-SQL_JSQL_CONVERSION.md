@@ -20,7 +20,7 @@ Add `"debug": true` to your JSQL query at the root level (same level as `from` a
 
 ```python
 import asyncio
-from namerec.uma import initialize_uma, uma_select
+from namerec.uma import UMA, DefaultMetadataProvider, NamespaceConfig
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import MetaData
 
@@ -29,7 +29,13 @@ async def main():
     engine = create_async_engine('sqlite+aiosqlite:///mydb.db')
     metadata = MetaData()
     await engine.run_sync(metadata.reflect)
-    initialize_uma(engine=engine, metadata=metadata)
+    
+    uma = UMA.create({
+        'main': NamespaceConfig(
+            engine=engine,
+            metadata_provider=DefaultMetadataProvider(),
+        ),
+    })
 
     # Query with debug mode enabled
     jsql = {
@@ -46,8 +52,8 @@ async def main():
         "debug": True  # Enable debug mode
     }
 
-    result = await uma_select(jsql)
-    result_dict = result.to_dict()
+    result = await uma.select(jsql)
+    result_dict = result  # Already a dict
 
     # Access debug SQL
     print("Generated SQL:")
@@ -291,8 +297,8 @@ jsql = {
     "debug": True
 }
 
-result = await uma_select(jsql)
-print(result.to_dict()['debug'])
+result = await uma.select(jsql)
+print(result['debug'])
 ```
 
 ### 2. Learning JSQL Syntax

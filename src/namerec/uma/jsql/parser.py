@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy import Select
+from sqlalchemy import Table
 from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import cast
@@ -17,9 +18,13 @@ from sqlalchemy import select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import ClauseElement
 
-from namerec.uma.core.context import UMAContext
+from collections.abc import Mapping
+
+from namerec.uma.core.exceptions import UMANotFoundError
+from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import EntityName
 from namerec.uma.core.utils import parse_entity_name
+from namerec.uma.jsql.alias_manager import AliasManager
 from namerec.uma.jsql.constants import ARITHMETIC_OPERATORS
 from namerec.uma.jsql.constants import COMPARISON_OPERATORS
 from namerec.uma.jsql.constants import JoinType
@@ -37,16 +42,16 @@ class JSQLParser:
     Converts JSQL dict to SQLAlchemy Select statement.
     """
 
-    def __init__(self, context: UMAContext) -> None:
+    def __init__(self, namespace_configs: Mapping[str, NamespaceConfig]) -> None:
         """
         Initialize JSQL parser.
 
         Args:
-            context: UMA execution context
+            namespace_configs: Mapping of namespace names to configurations
         """
-        self.context = context
-        self.ctes: dict[str, Select] = {}  # CTEs by name
-        self.table_aliases: dict[str, Any] = {}  # Table aliases for joins
+        self.namespace_configs = namespace_configs
+        self.ctes: dict[str, Select] = {}  # CTEs by name (for SQLAlchemy queries)
+        self.alias_manager = AliasManager()  # Manages table/column aliases
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
 
         # Operator handler dispatch table
@@ -62,19 +67,20 @@ class JSQLParser:
             JSQLOperator.LIKE: self._handle_like,
         }
 
-    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> Select:
+    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig]:
         """
-        Parse JSQL query into SQLAlchemy Select statement.
+        Parse JSQL query into SQLAlchemy Select statement and namespace config.
 
         Args:
             jsql: JSQL query dictionary
             params: Query parameters
 
         Returns:
-            SQLAlchemy Select statement
+            Tuple of (SQLAlchemy Select statement, NamespaceConfig)
 
         Raises:
             JSQLSyntaxError: If JSQL syntax is invalid
+            ValueError: If namespace not found or no default available
         """
         self.params = params or {}
 
@@ -85,7 +91,13 @@ class JSQLParser:
         # Build main query
         query = await self._build_query(jsql)
 
-        return query
+        # Determine namespace from parsed query
+        namespace = self._determine_namespace_from_parsed_query(jsql)
+
+        # Get namespace config (already validated in get_namespace_config)
+        config = self.get_namespace_config(namespace)
+
+        return query, config
 
     async def _parse_ctes(self, ctes: list[dict[str, Any]]) -> None:
         """
@@ -110,7 +122,11 @@ class JSQLParser:
             cte_query = await self._build_query(cte_def[JSQLField.QUERY.value])
 
             # Register CTE for later use
-            self.ctes[cte_name] = cte_query.cte(name=cte_name)
+            cte = cte_query.cte(name=cte_name)
+            self.ctes[cte_name] = cte
+            
+            # Register CTE in AliasManager for column resolution
+            self.alias_manager.register_cte(cte_name, cte)
 
     async def _build_query(self, jsql: JSQLQuery) -> Select:
         """
@@ -175,16 +191,15 @@ class JSQLParser:
 
     def _register_table_alias(self, alias_name: str, table: Any, *additional_aliases: str) -> None:
         """
-        Register table alias for column resolution.
+        Register table alias and index its columns for fast lookup.
 
         Args:
             alias_name: Primary alias name
             table: Table object
             additional_aliases: Additional alias names for the same table
         """
-        self.table_aliases[alias_name] = table
-        for additional_alias in additional_aliases:
-            self.table_aliases[additional_alias] = table
+        # Delegate to AliasManager
+        self.alias_manager.register_table(alias_name, table, *additional_aliases)
 
     async def _build_from(self, from_spec: str) -> Any:
         """
@@ -226,9 +241,81 @@ class JSQLParser:
         )
         return table
 
-    async def _get_table_async(self, entity_name: EntityName) -> Any:
+    def get_namespace_config(self, namespace: str) -> NamespaceConfig:
         """
-        Get table via metadata provider (lazy loading).
+        Get namespace config by name.
+
+        Args:
+            namespace: Namespace name
+
+        Returns:
+            NamespaceConfig for the namespace
+
+        Raises:
+            ValueError: If namespace not found
+        """
+        if namespace not in self.namespace_configs:
+            available = ', '.join(self.namespace_configs.keys())
+            raise ValueError(f'Namespace "{namespace}" not found. Available: {available}')
+
+        return self.namespace_configs[namespace]
+
+    def _get_default_namespace(self) -> str | None:
+        """
+        Get default namespace if single namespace configured.
+
+        Returns:
+            Namespace name if single namespace, None otherwise
+        """
+        if len(self.namespace_configs) == 1:
+            return next(iter(self.namespace_configs.keys()))
+        return None
+
+    def _determine_namespace_from_parsed_query(self, jsql: dict) -> str:
+        """
+        Determine namespace from parsed query.
+
+        Namespace comes from:
+        - FROM clause entity name
+        - Or default namespace if single namespace configured
+
+        Args:
+            jsql: JSQL query dictionary
+
+        Returns:
+            Namespace name
+
+        Raises:
+            ValueError: If namespace cannot be determined
+        """
+        from_entity = jsql.get('from')
+        if not from_entity:
+            # No FROM - use default
+            default_ns = self._get_default_namespace()
+            if default_ns:
+                return default_ns
+            raise ValueError("JSQL must contain 'from' field")
+
+        entity = parse_entity_name(from_entity if isinstance(from_entity, str) else '')
+
+        # Use entity namespace or default
+        if entity.namespace:
+            return entity.namespace
+
+        default_ns = self._get_default_namespace()
+        if default_ns:
+            return default_ns
+
+        raise ValueError(
+            'Namespace not specified and no default available. '
+            'Use explicit namespace or configure single namespace.'
+        )
+
+    async def _get_table_async(self, entity_name: EntityName) -> Table:
+        """
+        Get table from metadata provider.
+
+        Uses entity_name.namespace to determine which metadata provider to use.
 
         Args:
             entity_name: Entity name
@@ -239,11 +326,27 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If table not found
         """
-        from namerec.uma.core.utils import get_table
+        namespace = entity_name.namespace
+        if not namespace:
+            # Resolve default namespace
+            default_ns = self._get_default_namespace()
+            if default_ns:
+                namespace = default_ns
+            else:
+                raise ValueError(
+                    'Namespace not specified and no default available. '
+                    'Use explicit namespace or configure single namespace.'
+                )
+
+        config = self.get_namespace_config(namespace)
 
         try:
-            return await get_table(self.context, entity_name)
-        except Exception as e:
+            return await config.metadata_provider.get_table(
+                entity_name,
+                config.engine,
+                None,
+            )
+        except (UMANotFoundError, RuntimeError) as e:
             raise JSQLSyntaxError(f'Table "{entity_name}" not found: {e}') from e
 
     def _apply_alias(self, expression: ColumnElement, alias_name: str | None) -> ColumnElement:
@@ -355,50 +458,23 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If column not found
         """
-        # Check if it's qualified (table.column)
-        if '.' in field_spec:
-            table_name, column_name = field_spec.split('.', 1)
-
-            # Check table aliases first
-            if table_name in self.table_aliases:
-                table = self.table_aliases[table_name]
-                if hasattr(table, 'columns') and column_name in table.columns:
-                    return table.columns[column_name]
-
-            # Check CTEs
-            if table_name in self.ctes:
-                cte = self.ctes[table_name]
-                if hasattr(cte, 'columns') and column_name in cte.columns:
-                    return cte.columns[column_name]
-
-            # Load table via metadata provider (lazy loading)
-            entity_name = parse_entity_name(table_name)
-            try:
-                table = await self._get_table_async(entity_name)
-                if column_name in table.columns:
-                    return table.columns[column_name]
-            except Exception as e:
-                raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
-
-            raise JSQLSyntaxError(f'Column "{column_name}" not found in table "{table_name}"')
-
-        # Unqualified column - search in registered tables/CTEs
-        # First try table aliases
-        for table in self.table_aliases.values():
-            if hasattr(table, 'columns') and field_spec in table.columns:
-                return table.columns[field_spec]
-
-        # Try CTEs
-        for cte in self.ctes.values():
-            if hasattr(cte, 'columns') and field_spec in cte.columns:
-                return cte.columns[field_spec]
-
-        # Try FROM clause if provided
-        if from_clause is not None and hasattr(from_clause, 'columns'):
-            if field_spec in from_clause.columns:
-                return from_clause.columns[field_spec]
-
-        raise JSQLSyntaxError(f'Column "{field_spec}" not found')
+        # Try to resolve through AliasManager first
+        try:
+            return self.alias_manager.resolve_column(field_spec, from_clause)
+        except JSQLSyntaxError:
+            # If qualified column not found in aliases, try lazy loading
+            if '.' in field_spec:
+                table_name, column_name = field_spec.split('.', 1)
+                entity_name = parse_entity_name(table_name)
+                try:
+                    table = await self._get_table_async(entity_name)
+                    if column_name in table.columns:
+                        return table.columns[column_name]
+                except (UMANotFoundError, RuntimeError) as e:
+                    raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
+            
+            # Re-raise original error if lazy loading also fails
+            raise
 
     async def _process_joins_for_aliases(self, joins_spec: list[dict[str, Any]], base_table: Any) -> Any:
         """
@@ -444,7 +520,7 @@ class JSQLParser:
                 entity_name = parse_entity_name(table_name)
                 try:
                     table = await self._get_table_async(entity_name)
-                except Exception as e:
+                except (UMANotFoundError, RuntimeError) as e:
                     raise JSQLSyntaxError(f'Table "{table_name}" not found: {e}', path) from e
 
             # Handle alias

@@ -24,18 +24,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from namerec.uma import DefaultMetadataProvider
+from namerec.uma import NamespaceConfig
 from namerec.uma import Operation
+from namerec.uma import UMA
 from namerec.uma import UMAAccessDeniedError
 from namerec.uma import UMAContext
 from namerec.uma import VirtualViewHandler
 from namerec.uma import copy_field_meta
-from namerec.uma import get_registry
-from namerec.uma import initialize_uma
-from namerec.uma import uma_delete
-from namerec.uma import uma_entity_details
-from namerec.uma import uma_entity_list
-from namerec.uma import uma_read
-from namerec.uma import uma_save
 
 
 # ========== Custom Metadata Provider with Access Control ==========
@@ -138,11 +133,11 @@ class UserSummaryView(VirtualViewHandler):
         return query
 
     @classmethod
-    async def meta(cls, entity_name, context):  # noqa: ANN001, ANN201
+    async def meta(cls, entity_name, context, registry):  # noqa: ANN001, ANN201
         """Return metadata for virtual view."""
         columns_metadata = [
-            await copy_field_meta('users', 'id', context, {'name': 'user_id'}),
-            await copy_field_meta('users', 'name', context),
+            await copy_field_meta('users', 'id', context, registry, {'name': 'user_id'}),
+            await copy_field_meta('users', 'name', context, registry),
             {'name': 'order_count', 'type': 'integer', 'description': 'Number of orders'},
             {'name': 'total_spent', 'type': 'numeric', 'description': 'Total order amount'},
         ]
@@ -183,14 +178,15 @@ async def main() -> None:
     print('\n=== Initializing UMA ===')
 
     metadata_provider = AccessControlMetadataProvider()
-    registry = initialize_uma(
-        engine=engine,
-        metadata=metadata,
-        metadata_provider=metadata_provider,
-    )
+    uma = UMA.create({
+        'main': NamespaceConfig(
+            engine=engine,
+            metadata_provider=metadata_provider,
+        ),
+    })
 
     # Register virtual view
-    registry.register('user_summary', UserSummaryView)
+    uma.registry.register('user_summary', UserSummaryView)
 
     print('✓ UMA initialized')
     print('✓ Virtual view registered')
@@ -201,7 +197,7 @@ async def main() -> None:
     admin_user = User(user_id=1, role='admin')
 
     try:
-        entities = await uma_entity_list(user_context=admin_user)
+        entities = await uma.entity_list(user_context=admin_user)
         print(f'✓ Available entities: {entities}')
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
@@ -210,7 +206,7 @@ async def main() -> None:
     print('\n=== Example 2: Get metadata (admin) ===')
 
     try:
-        user_meta = await uma_entity_details('users', user_context=admin_user)
+        user_meta = await uma.entity_details('users', user_context=admin_user)
         print(f"✓ Users table columns: {[col['name'] for col in user_meta['columns']]}")
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
@@ -220,7 +216,7 @@ async def main() -> None:
 
     try:
         # Create user
-        user_id = await uma_save(
+        user_id = await uma.save(
             'users',
             {'name': 'John Doe', 'email': 'john@example.com'},
             user_context=admin_user,
@@ -228,7 +224,7 @@ async def main() -> None:
         print(f'✓ Created user with id={user_id}')
 
         # Create another user
-        user_id2 = await uma_save(
+        user_id2 = await uma.save(
             'users',
             {'name': 'Jane Smith', 'email': 'jane@example.com'},
             user_context=admin_user,
@@ -236,7 +232,7 @@ async def main() -> None:
         print(f'✓ Created user with id={user_id2}')
 
         # Create order
-        order_id = await uma_save(
+        order_id = await uma.save(
             'orders',
             {'user_id': user_id, 'total': 100.50},
             user_context=admin_user,
@@ -250,7 +246,7 @@ async def main() -> None:
     print('\n=== Example 4: Read record (admin) ===')
 
     try:
-        user_data = await uma_read('users', user_id, user_context=admin_user)
+        user_data = await uma.read('users', user_id, user_context=admin_user)
         print(f'✓ User data: {user_data}')
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
@@ -259,7 +255,7 @@ async def main() -> None:
     print('\n=== Example 5: Update record (admin) ===')
 
     try:
-        await uma_save(
+        await uma.save(
             'users',
             {'id': user_id, 'name': 'John Smith', 'email': 'john.smith@example.com'},
             user_context=admin_user,
@@ -267,7 +263,7 @@ async def main() -> None:
         print('✓ User updated')
 
         # Verify update
-        updated_user = await uma_read('users', user_id, user_context=admin_user)
+        updated_user = await uma.read('users', user_id, user_context=admin_user)
         print(f"✓ Updated name: {updated_user['name']}")
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
@@ -278,7 +274,7 @@ async def main() -> None:
     regular_user = User(user_id=2, role='user')
 
     try:
-        user_data = await uma_read('users', user_id, user_context=regular_user)
+        user_data = await uma.read('users', user_id, user_context=regular_user)
         print(f'✓ User can read: {user_data["name"]}')
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')
@@ -287,7 +283,7 @@ async def main() -> None:
     print('\n=== Example 7: Regular user - write denied ===')
 
     try:
-        await uma_save(
+        await uma.save(
             'users',
             {'id': user_id, 'name': 'Hacker', 'email': 'hacker@example.com'},
             user_context=regular_user,
@@ -300,7 +296,7 @@ async def main() -> None:
     print('\n=== Example 8: Regular user - delete denied ===')
 
     try:
-        await uma_delete('users', user_id, user_context=regular_user)
+        await uma.delete('users', user_id, user_context=regular_user)
         print('✗ User should not be able to delete!')
     except UMAAccessDeniedError:
         print('✓ Access correctly denied for delete operation')
@@ -311,7 +307,7 @@ async def main() -> None:
     guest_user = User(user_id=0, role='guest')
 
     try:
-        await uma_read('users', user_id, user_context=guest_user)
+        await uma.read('users', user_id, user_context=guest_user)
         print('✗ Guest should not have access!')
     except UMAAccessDeniedError:
         print('✓ Access correctly denied for guest')
@@ -320,7 +316,7 @@ async def main() -> None:
     print('\n=== Example 10: Delete record (admin) ===')
 
     try:
-        deleted = await uma_delete('users', user_id2, user_context=admin_user)
+        deleted = await uma.delete('users', user_id2, user_context=admin_user)
         print(f'✓ User deleted: {deleted}')
     except UMAAccessDeniedError as e:
         print(f'✗ Access denied: {e}')

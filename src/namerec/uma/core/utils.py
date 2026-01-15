@@ -50,6 +50,7 @@ async def copy_field_meta(
     source_entity: str | EntityName,
     field_name: str,
     context: UMAContext,
+    registry: Any,  # EntityRegistry - avoiding circular import
     overrides: dict[str, Any] | None = None,
 ) -> dict:
     """
@@ -61,6 +62,7 @@ async def copy_field_meta(
         source_entity: Source entity name
         field_name: Field name to copy metadata from
         context: Execution context
+        registry: Entity registry instance
         overrides: Optional dictionary with fields to override
 
     Returns:
@@ -72,10 +74,6 @@ async def copy_field_meta(
     if isinstance(source_entity, str):
         source_entity = parse_entity_name(source_entity)
 
-    # Import here to avoid circular dependency
-    from namerec.uma.api import get_registry
-
-    registry = get_registry()
     handler = await registry.get_handler(source_entity, context)
 
     # Get metadata

@@ -1,10 +1,10 @@
 """Entity registry for UMA."""
 
-
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
+from namerec.uma.handlers.base import DefaultEntityHandler
 
 
 class EntityRegistry:
@@ -21,12 +21,7 @@ class EntityRegistry:
             default_handler: Default handler class for unregistered entities
         """
         self._handlers: dict[str, type[EntityHandler]] = {}
-        self._default_handler = default_handler
-        if default_handler is None:
-            # Import here to avoid circular dependency
-            from namerec.uma.handlers.base import DefaultEntityHandler
-
-            self._default_handler = DefaultEntityHandler
+        self._default_handler = default_handler or DefaultEntityHandler
 
     def register(
         self,
@@ -114,40 +109,3 @@ class EntityRegistry:
         """
         # Only registered custom handlers
         return sorted(self._handlers.keys())
-
-
-# Global registry singleton
-_global_registry: EntityRegistry | None = None
-
-
-def init_global_registry(
-    default_handler: type[EntityHandler] | None = None,
-) -> EntityRegistry:
-    """
-    Initialize global registry.
-
-    Args:
-        default_handler: Optional default handler
-
-    Returns:
-        Initialized registry
-    """
-    global _global_registry  # noqa: PLW0603
-    _global_registry = EntityRegistry(default_handler=default_handler)
-    return _global_registry
-
-
-def get_global_registry() -> EntityRegistry:
-    """
-    Get global registry instance.
-
-    Returns:
-        Global registry
-
-    Raises:
-        RuntimeError: If registry not initialized
-    """
-    if _global_registry is None:
-        # Auto-initialize with default settings
-        return init_global_registry()
-    return _global_registry

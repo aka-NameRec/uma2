@@ -18,12 +18,11 @@ from namerec.uma import DefaultMetadataProvider
 from namerec.uma import JSQLExecutionError
 from namerec.uma import JSQLSyntaxError
 from namerec.uma import NamespaceConfig
-from namerec.uma import uma_initialize
-from namerec.uma import uma_select
+from namerec.uma import UMA
 
 
 @pytest_asyncio.fixture
-async def test_db():
+async def uma():  # noqa: ANN201
     """Create test database with sample data."""
     # Create async engine
     engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
@@ -77,7 +76,7 @@ async def test_db():
 
     # Initialize UMA
     metadata_provider = DefaultMetadataProvider()
-    uma_initialize({
+    uma = UMA.create({
         'test': NamespaceConfig(
             engine=engine,
             metadata_provider=metadata_provider,
@@ -87,21 +86,21 @@ async def test_db():
     # Preload metadata
     await metadata_provider.preload(engine, namespace='test')
 
-    yield engine, metadata
+    yield uma
 
     # Cleanup
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_simple_select(test_db):
+async def test_simple_select(uma):  # noqa: ANN001
     """Test simple SELECT query."""
     jsql = {
         'from': 'customers',
         'select': ['id', 'name', 'email'],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert 'meta' in result
     assert 'data' in result
@@ -113,7 +112,7 @@ async def test_simple_select(test_db):
 
 
 @pytest.mark.asyncio
-async def test_select_with_where(test_db):
+async def test_select_with_where(uma):
     """Test SELECT with WHERE clause."""
     jsql = {
         'from': 'customers',
@@ -125,13 +124,13 @@ async def test_select_with_where(test_db):
         },
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['data']) == 2  # John Doe and Bob Johnson
 
 
 @pytest.mark.asyncio
-async def test_select_with_and_condition(test_db):
+async def test_select_with_and_condition(uma):
     """Test SELECT with AND condition."""
     jsql = {
         'from': 'customers',
@@ -153,13 +152,13 @@ async def test_select_with_and_condition(test_db):
         },
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['data']) == 1  # Only John Doe is active in Engineering
 
 
 @pytest.mark.asyncio
-async def test_select_with_alias(test_db):
+async def test_select_with_alias(uma):
     """Test SELECT with column aliases."""
     jsql = {
         'from': 'customers',
@@ -171,14 +170,14 @@ async def test_select_with_alias(test_db):
         'limit': 1,
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert result['meta'][1]['name'] == 'customer_name'
     assert result['meta'][2]['name'] == 'contact_email'
 
 
 @pytest.mark.asyncio
-async def test_aggregation(test_db):
+async def test_aggregation(uma):
     """Test aggregation functions."""
     jsql = {
         'from': 'orders',
@@ -190,7 +189,7 @@ async def test_aggregation(test_db):
         'group_by': [{'field': 'customer_id'}],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['meta']) == 3
     assert result['meta'][1]['name'] == 'order_count'
@@ -199,7 +198,7 @@ async def test_aggregation(test_db):
 
 
 @pytest.mark.asyncio
-async def test_join(test_db):
+async def test_join(uma):
     """Test JOIN query."""
     jsql = {
         'from': 'orders',
@@ -222,7 +221,7 @@ async def test_join(test_db):
         ],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['meta']) == 3
     assert result['meta'][1]['name'] == 'customer_name'
@@ -230,7 +229,7 @@ async def test_join(test_db):
 
 
 @pytest.mark.asyncio
-async def test_order_by(test_db):
+async def test_order_by(uma):
     """Test ORDER BY clause."""
     jsql = {
         'from': 'orders',
@@ -238,7 +237,7 @@ async def test_order_by(test_db):
         'order_by': [{'field': 'amount', 'direction': 'desc'}],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check that amounts are in descending order
     amounts = [row[1] for row in result['data']]
@@ -246,7 +245,7 @@ async def test_order_by(test_db):
 
 
 @pytest.mark.asyncio
-async def test_limit_offset(test_db):
+async def test_limit_offset(uma):
     """Test LIMIT and OFFSET."""
     jsql = {
         'from': 'customers',
@@ -256,14 +255,14 @@ async def test_limit_offset(test_db):
         'offset': 1,
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['data']) == 2
     assert result['data'][0][0] == 2  # Second customer
 
 
 @pytest.mark.asyncio
-async def test_expression(test_db):
+async def test_expression(uma):
     """Test expression in SELECT."""
     jsql = {
         'from': 'orders',
@@ -283,7 +282,7 @@ async def test_expression(test_db):
         'limit': 1,
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert result['meta'][3]['name'] == 'amount_with_tax'
     # Check that calculation is correct
@@ -293,7 +292,7 @@ async def test_expression(test_db):
 
 
 @pytest.mark.asyncio
-async def test_cte(test_db):
+async def test_cte(uma):
     """Test CTE (Common Table Expression)."""
     jsql = {
         'with': [
@@ -314,13 +313,13 @@ async def test_cte(test_db):
         'select': ['*'],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['data']) == 2  # Two active customers
 
 
 @pytest.mark.asyncio
-async def test_subquery_in(test_db):
+async def test_subquery_in(uma):
     """Test subquery with IN operator."""
     jsql = {
         'from': 'customers',
@@ -337,13 +336,13 @@ async def test_subquery_in(test_db):
         },
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     assert len(result['data']) == 2  # Customers who have orders
 
 
 @pytest.mark.asyncio
-async def test_query_parameters(test_db):
+async def test_query_parameters(uma):
     """Test query with parameters."""
     jsql = {
         'from': 'orders',
@@ -356,25 +355,25 @@ async def test_query_parameters(test_db):
     }
 
     params = {'min_amount': 100}
-    result = await uma_select(jsql, params)
+    result = await uma.select(jsql, params)
 
     # Should get orders with amount >= 100
     assert len(result['data']) == 2
 
 
 @pytest.mark.asyncio
-async def test_invalid_jsql_missing_from(test_db):
+async def test_invalid_jsql_missing_from(uma):
     """Test error handling for missing 'from' field."""
     jsql = {
         'select': ['id', 'name'],
     }
 
     with pytest.raises(ValueError, match='must contain'):
-        await uma_select(jsql)
+        await uma.select(jsql)
 
 
 @pytest.mark.asyncio
-async def test_invalid_jsql_unknown_table(test_db):
+async def test_invalid_jsql_unknown_table(uma):
     """Test error handling for unknown table."""
     jsql = {
         'from': 'nonexistent_table',
@@ -382,11 +381,11 @@ async def test_invalid_jsql_unknown_table(test_db):
     }
 
     with pytest.raises((JSQLSyntaxError, JSQLExecutionError)):
-        await uma_select(jsql)
+        await uma.select(jsql)
 
 
 @pytest.mark.asyncio
-async def test_invalid_jsql_unknown_column(test_db):
+async def test_invalid_jsql_unknown_column(uma):
     """Test error handling for unknown column."""
     jsql = {
         'from': 'customers',
@@ -394,11 +393,11 @@ async def test_invalid_jsql_unknown_column(test_db):
     }
 
     with pytest.raises((JSQLSyntaxError, JSQLExecutionError)):
-        await uma_select(jsql)
+        await uma.select(jsql)
 
 
 @pytest.mark.asyncio
-async def test_result_metadata_types(test_db):
+async def test_result_metadata_types(uma):
     """Test that result metadata includes type information."""
     jsql = {
         'from': 'customers',
@@ -406,7 +405,7 @@ async def test_result_metadata_types(test_db):
         'limit': 1,
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check metadata structure
     for col_meta in result['meta']:
@@ -419,7 +418,7 @@ async def test_result_metadata_types(test_db):
 
 
 @pytest.mark.asyncio
-async def test_having_clause(test_db):
+async def test_having_clause(uma):
     """Test HAVING clause with aggregation."""
     jsql = {
         'from': 'orders',
@@ -435,7 +434,7 @@ async def test_having_clause(test_db):
         },
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Only customer with more than 1 order
     assert len(result['data']) == 1
@@ -443,7 +442,7 @@ async def test_having_clause(test_db):
 
 
 @pytest.mark.asyncio
-async def test_window_function_row_number(test_db):
+async def test_window_function_row_number(uma):
     """Test window function ROW_NUMBER."""
     jsql = {
         'from': 'orders',
@@ -462,7 +461,7 @@ async def test_window_function_row_number(test_db):
         ],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check that we have row numbers
     assert len(result['meta']) == 4
@@ -478,7 +477,7 @@ async def test_window_function_row_number(test_db):
 
 
 @pytest.mark.asyncio
-async def test_window_function_avg(test_db):
+async def test_window_function_avg(uma):
     """Test window function AVG."""
     jsql = {
         'from': 'orders',
@@ -497,7 +496,7 @@ async def test_window_function_avg(test_db):
         ],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check metadata
     assert result['meta'][3]['name'] == 'avg_amount'
@@ -511,7 +510,7 @@ async def test_window_function_avg(test_db):
 
 
 @pytest.mark.asyncio
-async def test_order_by_alias(test_db):
+async def test_order_by_alias(uma):
     """Test ORDER BY with column alias from aggregation."""
     jsql = {
         'from': 'orders',
@@ -523,7 +522,7 @@ async def test_order_by_alias(test_db):
         'order_by': [{'field': 'total', 'direction': 'desc'}],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check that results are ordered by total descending
     totals = [float(row[1]) for row in result['data']]
@@ -533,7 +532,7 @@ async def test_order_by_alias(test_db):
 
 
 @pytest.mark.asyncio
-async def test_limit_zero(test_db):
+async def test_limit_zero(uma):
     """Test LIMIT 0 is applied correctly (Bug fix: 0 is falsy but valid)."""
     jsql = {
         'from': 'customers',
@@ -541,7 +540,7 @@ async def test_limit_zero(test_db):
         'limit': 0,
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # LIMIT 0 should return no rows
     assert len(result['data']) == 0
@@ -550,7 +549,7 @@ async def test_limit_zero(test_db):
 
 
 @pytest.mark.asyncio
-async def test_offset_zero(test_db):
+async def test_offset_zero(uma):
     """Test OFFSET 0 is applied correctly (Bug fix: 0 is falsy but valid)."""
     jsql = {
         'from': 'customers',
@@ -560,7 +559,7 @@ async def test_offset_zero(test_db):
         'limit': 2,
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # OFFSET 0 should be same as no offset - starts from first row
     assert len(result['data']) == 2
@@ -568,7 +567,7 @@ async def test_offset_zero(test_db):
 
 
 @pytest.mark.asyncio
-async def test_arithmetic_operators_validation(test_db):
+async def test_arithmetic_operators_validation(uma):
     """Test arithmetic operators validate required fields (Bug fix: prevent KeyError)."""
     # Missing 'left' field
     jsql_missing_left = {
@@ -585,7 +584,7 @@ async def test_arithmetic_operators_validation(test_db):
     }
 
     with pytest.raises(JSQLSyntaxError) as exc_info:
-        await uma_select(jsql_missing_left)
+        await uma.select(jsql_missing_left)
     assert '+ operator must have "left" field' in str(exc_info.value)
 
     # Missing 'right' field
@@ -603,14 +602,14 @@ async def test_arithmetic_operators_validation(test_db):
     }
 
     with pytest.raises(JSQLSyntaxError) as exc_info:
-        await uma_select(jsql_missing_right)
+        await uma.select(jsql_missing_right)
     assert '* operator must have "right" field' in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_debug_mode(test_db: tuple) -> None:
+async def test_debug_mode(uma: tuple) -> None:
     """Test JSQL debug mode returns SQL in response."""
-    # test_db is already initialized via fixture
+    # uma is already initialized via fixture
     # No need to initialize again
 
     # Simple query with debug enabled
@@ -625,7 +624,7 @@ async def test_debug_mode(test_db: tuple) -> None:
         'debug': True,  # Enable debug mode
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check that debug SQL is present
     assert 'debug' in result
@@ -646,9 +645,9 @@ async def test_debug_mode(test_db: tuple) -> None:
 
 
 @pytest.mark.asyncio
-async def test_debug_mode_disabled(test_db: tuple) -> None:
+async def test_debug_mode_disabled(uma: tuple) -> None:
     """Test that debug SQL is not included when debug mode is disabled."""
-    # test_db is already initialized via fixture
+    # uma is already initialized via fixture
     # No need to initialize again
 
     # Query without debug
@@ -657,16 +656,16 @@ async def test_debug_mode_disabled(test_db: tuple) -> None:
         'select': [{'field': 'id'}],
     }
 
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check that debug SQL is not present
     assert 'debug' not in result or result.get('debug') is None
 
 
 @pytest.mark.asyncio
-async def test_debug_mode_with_in_operator(test_db: tuple) -> None:
+async def test_debug_mode_with_in_operator(uma: tuple) -> None:
     """Test debug mode with IN operator (complex type that may fail literal_binds)."""
-    # test_db is already initialized via fixture
+    # uma is already initialized via fixture
     # No need to initialize again
 
     # Query with IN operator and debug enabled
@@ -682,7 +681,7 @@ async def test_debug_mode_with_in_operator(test_db: tuple) -> None:
     }
 
     # This should not raise an error even if literal_binds fails
-    result = await uma_select(jsql)
+    result = await uma.select(jsql)
 
     # Check that query executed successfully
     assert 'data' in result

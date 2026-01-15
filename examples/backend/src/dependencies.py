@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from namerec.uma import DefaultMetadataProvider
 from namerec.uma import NamespaceConfig
-from namerec.uma import uma_initialize
+from namerec.uma import UMA
 
 
 class Container(containers.DeclarativeContainer):
@@ -25,9 +25,9 @@ class Container(containers.DeclarativeContainer):
     # UMA metadata provider
     metadata_provider = providers.Singleton(DefaultMetadataProvider)
 
-    # UMA registry (initialized once at startup)
-    registry = providers.Singleton(
-        lambda engine, provider: uma_initialize(
+    # UMA application instance (initialized once at startup)
+    uma_app = providers.Singleton(
+        lambda engine, provider: UMA.create(
             {
                 'main': NamespaceConfig(
                     engine=engine,
@@ -55,3 +55,13 @@ def get_user_context() -> dict:
         User context dictionary (stub for demo)
     """
     return container.user_context()
+
+
+def get_uma() -> UMA:
+    """
+    FastAPI dependency to get UMA instance.
+
+    Returns:
+        UMA application instance
+    """
+    return container.uma_app()

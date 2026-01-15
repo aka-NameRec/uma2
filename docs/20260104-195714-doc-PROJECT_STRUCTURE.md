@@ -29,7 +29,7 @@ uma2/
 │           │   ├── parser.py     # JSQL to SQLAlchemy parser
 │           │   ├── executor.py   # JSQL query executor
 │           │   └── result.py     # Result builder with metadata
-│           ├── api.py            # High-level API functions
+│           ├── application.py    # UMA application class
 │           ├── registry.py       # EntityRegistry
 │           └── metadata.py       # DefaultMetadataProvider
 ├── tests/                        # Tests
@@ -67,12 +67,16 @@ After installation, the package can be imported as:
 
 ```python
 from namerec.uma import (
+    # Main class
+    UMA,
+    
     # Core types
     EntityName,
     Operation,
     EntityHandler,
     MetadataProvider,
     UMAContext,
+    NamespaceConfig,
     
     # Exceptions
     UMAError,
@@ -93,8 +97,6 @@ from namerec.uma import (
     
     # Registry
     EntityRegistry,
-    init_global_registry,
-    get_global_registry,
     
     # Metadata
     DefaultMetadataProvider,
@@ -184,7 +186,7 @@ mypy src/
 Example:
 
 ```python
-from namerec.uma import VirtualViewHandler, get_global_registry
+from namerec.uma import VirtualViewHandler, UMA, DefaultMetadataProvider, NamespaceConfig
 
 class MyView(VirtualViewHandler):
     @classmethod
@@ -192,8 +194,13 @@ class MyView(VirtualViewHandler):
         # Implementation
         pass
 
-registry = get_global_registry()
-registry.register('my_view', MyView)
+uma = UMA.create({
+    'main': NamespaceConfig(
+        engine=engine,
+        metadata_provider=DefaultMetadataProvider(),
+    ),
+})
+uma.registry.register('my_view', MyView)
 ```
 
 ## Testing Strategy
@@ -206,9 +213,9 @@ registry.register('my_view', MyView)
 ## Future Enhancements
 
 - JSQL parser (JSON to SQLAlchemy) - ✅ Implemented (see [JSQL Specification](20260104-220450-doc-JSQL_SPECIFICATION.md))
-- Access control hooks
-- Query executor
-- API layer (uma_select, uma_read, uma_save, etc.) - ✅ Implemented
+- Access control hooks - ✅ Implemented (via MetadataProvider.can())
+- Query executor - ✅ Implemented (JSQLExecutor)
+- API layer (UMA class with methods) - ✅ Implemented
 - Support for many-to-many relationships
-- Caching layer
+- Caching layer - ✅ Implemented (MemoryCacheBackend, RedisCacheBackend)
 - Performance optimizations

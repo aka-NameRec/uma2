@@ -4,14 +4,10 @@ import structlog
 from fastapi import APIRouter
 from fastapi import Depends
 
-from namerec.uma import uma_delete
-from namerec.uma import uma_entity_details
-from namerec.uma import uma_entity_list
-from namerec.uma import uma_read
-from namerec.uma import uma_save
-from namerec.uma import uma_select
+from namerec.uma import UMA
 from namerec.uma.jsql.converter import jsql_to_sql
 from namerec.uma.jsql.converter import sql_to_jsql
+from src.dependencies import get_uma
 from src.dependencies import get_user_context
 from src.models.requests import DeleteRequest
 from src.models.requests import EntityDetailsRequest
@@ -34,6 +30,7 @@ router = APIRouter(prefix='/api/uma', tags=['UMA'])
 async def select_endpoint(
     request: SelectRequest,
     user_context: dict = Depends(get_user_context),
+    uma: UMA = Depends(get_uma),
 ) -> dict:
     """
     Execute JSQL query.
@@ -41,6 +38,7 @@ async def select_endpoint(
     Args:
         request: JSQL query with optional parameters
         user_context: User context for access control
+        uma: UMA application instance
 
     Returns:
         Query result with metadata and data
@@ -51,7 +49,7 @@ async def select_endpoint(
         has_params=request.params is not None,
     )
 
-    result = await uma_select(
+    result = await uma.select(
         jsql=request.jsql,
         params=request.params,
         user_context=user_context,
@@ -65,6 +63,7 @@ async def select_endpoint(
 async def read_endpoint(
     request: ReadRequest,
     user_context: dict = Depends(get_user_context),
+    uma: UMA = Depends(get_uma),
 ) -> dict:
     """
     Read a single record by ID.
@@ -72,13 +71,14 @@ async def read_endpoint(
     Args:
         request: Entity name and record ID
         user_context: User context for access control
+        uma: UMA application instance
 
     Returns:
         Record data as dictionary
     """
     logger.info('Read request', entity_name=request.entity_name, id=request.id)
 
-    result = await uma_read(
+    result = await uma.read(
         entity_name=request.entity_name,
         id_value=request.id,
         user_context=user_context,
@@ -92,6 +92,7 @@ async def read_endpoint(
 async def save_endpoint(
     request: SaveRequest,
     user_context: dict = Depends(get_user_context),
+    uma: UMA = Depends(get_uma),
 ) -> dict:
     """
     Save a record (create or update).
@@ -101,6 +102,7 @@ async def save_endpoint(
     Args:
         request: Entity name and record data
         user_context: User context for access control
+        uma: UMA application instance
 
     Returns:
         Full record data after save
@@ -115,14 +117,14 @@ async def save_endpoint(
     )
 
     # Save record (returns ID)
-    saved_id = await uma_save(
+    saved_id = await uma.save(
         entity_name=request.entity_name,
         data=request.data,
         user_context=user_context,
     )
 
     # Read back the full record
-    record = await uma_read(
+    record = await uma.read(
         entity_name=request.entity_name,
         id_value=saved_id,
         user_context=user_context,
@@ -136,6 +138,7 @@ async def save_endpoint(
 async def delete_endpoint(
     request: DeleteRequest,
     user_context: dict = Depends(get_user_context),
+    uma: UMA = Depends(get_uma),
 ) -> dict:
     """
     Delete a record by ID.
@@ -143,13 +146,14 @@ async def delete_endpoint(
     Args:
         request: Entity name and record ID
         user_context: User context for access control
+        uma: UMA application instance
 
     Returns:
         Deletion status
     """
     logger.info('Delete request', entity_name=request.entity_name, id=request.id)
 
-    deleted = await uma_delete(
+    deleted = await uma.delete(
         entity_name=request.entity_name,
         id_value=request.id,
         user_context=user_context,
@@ -163,6 +167,7 @@ async def delete_endpoint(
 async def entity_list_endpoint(
     request: EntityListRequest,
     user_context: dict = Depends(get_user_context),
+    uma: UMA = Depends(get_uma),
 ) -> dict:
     """
     Get list of available entities.
@@ -170,13 +175,14 @@ async def entity_list_endpoint(
     Args:
         request: Optional namespace filter
         user_context: User context for access control
+        uma: UMA application instance
 
     Returns:
         List of entity names
     """
     logger.info('Entity list request', namespace=request.namespace)
 
-    entities = await uma_entity_list(
+    entities = await uma.entity_list(
         user_context=user_context,
         namespace=request.namespace,
     )
@@ -189,6 +195,7 @@ async def entity_list_endpoint(
 async def entity_details_endpoint(
     request: EntityDetailsRequest,
     user_context: dict = Depends(get_user_context),
+    uma: UMA = Depends(get_uma),
 ) -> dict:
     """
     Get entity metadata (structure).
@@ -196,13 +203,14 @@ async def entity_details_endpoint(
     Args:
         request: Entity name
         user_context: User context for access control
+        uma: UMA application instance
 
     Returns:
         Entity metadata dictionary
     """
     logger.info('Entity details request', entity_name=request.entity_name)
 
-    details = await uma_entity_details(
+    details = await uma.entity_details(
         entity_name=request.entity_name,
         user_context=user_context,
     )

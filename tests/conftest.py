@@ -11,9 +11,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from namerec.uma import DefaultMetadataProvider
 from namerec.uma import NamespaceConfig
+from namerec.uma import UMA
 from namerec.uma import UMAContext
-from namerec.uma import init_global_registry
-from namerec.uma import uma_initialize
 
 
 @pytest.fixture
@@ -43,35 +42,30 @@ async def engine(metadata: MetaData):  # noqa: ANN201
 
 
 @pytest_asyncio.fixture
-async def context(engine, metadata) -> UMAContext:  # noqa: ANN001
-    """Create UMA context."""
+async def uma(engine, metadata) -> UMA:  # noqa: ANN001
+    """Create UMA instance for tests."""
     metadata_provider = DefaultMetadataProvider()
-    
-    # Initialize UMA with namespace config
-    uma_initialize({
+
+    # Create tables first
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+
+    # Create UMA instance
+    uma_instance = UMA.create({
         'test': NamespaceConfig(
             engine=engine,
             metadata_provider=metadata_provider,
         ),
     })
-    
-    # Create context
-    ctx = UMAContext(
-        engine=engine,
-        metadata_provider=metadata_provider,
-        namespace='test',
-    )
-    
-    # Preload metadata for tests (creates tables first)
-    async with engine.begin() as conn:
-        await conn.run_sync(metadata.create_all)
-    
+
+    # Preload metadata for tests
     await metadata_provider.preload(engine, namespace='test')
-    
-    return ctx
+
+    return uma_instance
 
 
-@pytest.fixture(autouse=True)
-def reset_global_registry() -> None:
-    """Reset global registry before each test."""
-    init_global_registry()
+@pytest_asyncio.fixture
+async def context(uma: UMA) -> UMAContext:  # noqa: ANN001
+    """Create UMA context."""
+    # Create context from UMA instance
+    return uma._create_context('test')

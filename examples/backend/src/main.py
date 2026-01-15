@@ -39,8 +39,8 @@ async def lifespan(app: FastAPI):  # noqa: ANN201, ARG001
     # Configure DI container
     container.config.database_url.from_value(settings.database_url)
 
-    # Initialize UMA (triggers registry creation)
-    container.registry()
+    # Initialize UMA application
+    container.uma_app()
 
     # Optionally preload metadata for production
     # await container.metadata_provider().preload(
