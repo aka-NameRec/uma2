@@ -98,12 +98,20 @@ class JSQLExecutor:
                 # Map JSQL parameter names to SQL parameter names and execute
                 # params_mapping maps JSQL param names to SQL param names (bindparam keys)
                 if cached.params_mapping and params:
-                    # Build SQL parameters dict using cached mapping
-                    # Since we use key=param_name in bindparam(), SQL param name matches JSQL param name
+                    # Build SQL parameters for cached query
+                    # For SQLite: SQL was converted from ? to :param_name during caching
+                    # For other dialects: use named parameters directly
+                    # When same parameter is used multiple times, SQL contains :param_name multiple times
+                    # SQLite supports this - same named param can appear multiple times
                     sql_params = {}
+                    # Add JSQL parameters
                     for jsql_param_name, sql_param_name in cached.params_mapping.items():
                         if jsql_param_name in params:
-                            sql_params[sql_param_name] = params[jsql_param_name]
+                            # Use JSQL param name in SQL (we replaced ? with :jsql_param_name during caching)
+                            sql_params[jsql_param_name] = params[jsql_param_name]
+                    # Add literal parameters (SQLAlchemy-generated params for literals)
+                    # These are safe because values come from compiled.params, not user input
+                    sql_params.update(cached.literal_params)
                     result = await cls._execute_cached_query(cached.sql, sql_params, config.engine, debug_sql)
                 else:
                     # No parameters - execute with empty params
@@ -142,12 +150,46 @@ class JSQLExecutor:
                 # Since we use key=param_name in bindparam(), the mapping should preserve names
                 # param_mapping is already in the format: {jsql_name: sql_name}
                 
+                # For SQLite: SQLAlchemy compiles with ? placeholders, but SQLite supports named params
+                # Convert ? placeholders to named parameters (:param_name) for consistency
+                sql_str = str(compiled)
+                param_order = None
+                if config.engine.dialect.name == 'sqlite' and hasattr(compiled, 'positiontup') and compiled.positiontup:
+                    # Replace ? with named parameters :param_name
+                    # positiontup contains SQL param names in order they appear in SQL
+                    # When same parameter is used multiple times, it appears multiple times in positiontup
+                    param_order = list(compiled.positiontup)
+                    # Build mapping: SQL param name -> JSQL param name (for params that exist in params_mapping)
+                    sql_to_jsql = {sql_name: jsql_name for jsql_name, sql_name in param_mapping.items()}
+                    literal_params = {}  # Store values for SQLAlchemy-generated params (for security)
+                    for sql_param_name in param_order:
+                        # Find corresponding JSQL param name
+                        jsql_param_name = sql_to_jsql.get(sql_param_name)
+                        if jsql_param_name:
+                            # Replace ? with :jsql_param_name (use JSQL name for consistency)
+                            # When same JSQL param is used multiple times, all ? will be replaced with same name
+                            sql_str = sql_str.replace('?', f':{jsql_param_name}', 1)
+                        else:
+                            # SQLAlchemy-generated param (param_1, param_2, etc.) for literals
+                            # Store value and use named param to avoid SQL injection
+                            if sql_param_name in compiled.params:
+                                literal_value = compiled.params[sql_param_name]
+                                # Store value for later use with bindparam()
+                                literal_params[sql_param_name] = literal_value
+                                # Replace ? with named param (will be bound via bindparam() for security)
+                                sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
+                            else:
+                                # Fallback: keep as named param (shouldn't happen)
+                                sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
+                
                 # Cache SQL with parameter placeholders
                 # If query has no parameters, SQL will have embedded literal values
-                # If query has parameters, SQL will have placeholders (e.g., $1, $2 or :param_name)
+                # If query has parameters, SQL will have named placeholders (:param_name)
                 cached_query = CachedQuery(
-                    sql=str(compiled),
+                    sql=sql_str,  # SQL with named parameters (:param_name) instead of ?
                     params_mapping=param_mapping,  # Map JSQL param names to SQL param names (bindparam keys)
+                    literal_params=literal_params,  # SQLAlchemy-generated param names -> literal values (for security)
+                    param_order=param_order,  # Parameter order (for reference, not used for execution)
                     dialect=config.engine.dialect.name,
                     entities=select_entities,
                     debug_sql=debug_sql,  # Cache debug SQL to avoid recompilation
@@ -214,13 +256,19 @@ class JSQLExecutor:
             await conn.close()
 
     @staticmethod
-    async def _execute_cached_query(sql: str, params: dict | None, engine: Engine, debug_sql: str | None = None) -> QueryResult:
+    async def _execute_cached_query(
+        sql: str, 
+        params: dict | None, 
+        engine: Engine, 
+        debug_sql: str | None = None,
+        param_order: list[str] | None = None
+    ) -> QueryResult:
         """
         Execute cached SQL query and return result.
         
         Args:
-            sql: Cached SQL string (may contain parameter placeholders)
-            params: Parameter values to bind (keys match SQL parameter names)
+            sql: Cached SQL string with named parameter placeholders (:param_name)
+            params: Parameter values to bind (dict with keys matching SQL parameter names)
             engine: Database engine
             debug_sql: Optional debug SQL string
             
@@ -229,10 +277,10 @@ class JSQLExecutor:
         """
         conn = await engine.connect()
         try:
-            # Execute cached SQL with parameter binding
-            # If SQL has placeholders (e.g., $1, $2), params will be bound to them
-            # If SQL has embedded literals (no placeholders), params will be empty
-            result = await conn.execute(text(sql), params or {})
+            # Execute cached SQL with named parameter binding
+            # SQL has been converted to use named parameters (:param_name) for all dialects
+            # This works for SQLite (which supports named params) and other databases
+            result = await conn.execute(text(sql), params if params is not None else {})
             return JSQLExecutor._format_cached_result(result, debug_sql)
         finally:
             await conn.close()

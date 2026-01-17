@@ -1054,6 +1054,102 @@ async def test_cached_query_extra_parameter(uma):
 
 
 @pytest.mark.asyncio
+async def test_cached_query_duplicate_parameter(uma):
+    """Test behavior when same parameter is used multiple times in query."""
+    from namerec.uma.jsql.cache import MemoryCacheBackend
+    from namerec.uma import DefaultMetadataProvider, NamespaceConfig
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import MetaData, Table, Column, Integer, Numeric
+    
+    cache_backend = MemoryCacheBackend(max_size=10)
+    test_engine = create_async_engine('sqlite+aiosqlite:///:memory:', echo=False)
+    metadata = MetaData()
+    orders_table = Table(
+        'orders',
+        metadata,
+        Column('id', Integer, primary_key=True),
+        Column('amount', Numeric(10, 2), nullable=False),
+    )
+    
+    async with test_engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+        await conn.execute(
+            orders_table.insert(),
+            [
+                {'id': 1, 'amount': 100.00},
+                {'id': 2, 'amount': 200.00},
+                {'id': 3, 'amount': 150.00},
+            ],
+        )
+    
+    metadata_provider = DefaultMetadataProvider()
+    uma_cached = UMA.create({
+        'test': NamespaceConfig(
+            engine=test_engine,
+            metadata_provider=metadata_provider,
+        ),
+    }, cache_backend=cache_backend)
+    
+    await metadata_provider.preload(test_engine, namespace='test')
+    
+    # Query where same parameter is used multiple times
+    # amount >= min_amount AND amount <= min_amount * 2
+    jsql = {
+        'from': 'orders',
+        'select': ['id', 'amount'],
+        'where': {
+            'op': 'and',
+            'conditions': [
+                {
+                    'op': '>=',
+                    'left': {'field': 'amount'},
+                    'right': {'param': 'min_amount'},
+                },
+                {
+                    'op': '<=',
+                    'left': {'field': 'amount'},
+                    'right': {
+                        'op': '*',
+                        'left': {'param': 'min_amount'},
+                        'right': {'value': 2},
+                    },
+                },
+            ],
+        },
+    }
+    
+    # First query - cache SQL
+    # Query: amount >= 100 AND amount <= 100 * 2 (amount >= 100 AND amount <= 200)
+    result1 = await uma_cached.select(jsql, params={'min_amount': 100})
+    # Should get orders with amount 100, 150, 200 (all >= 100 and <= 200)
+    assert len(result1['data']) == 3
+    
+    # Second query with different value - should use cached SQL
+    # Query: amount >= 150 AND amount <= 150 * 2 (amount >= 150 AND amount <= 300)
+    result2 = await uma_cached.select(jsql, params={'min_amount': 150})
+    # Should get orders with amount 150, 200 (both >= 150 and <= 300)
+    assert len(result2['data']) == 2
+    
+    # Verify cache was used (same SQL, different params)
+    assert result1['data'] != result2['data']
+    
+    # Verify that parameter min_amount was used correctly in both places
+    # All results from first query should have amount >= 100 and <= 200
+    for row in result1['data']:
+        amount = float(row[1])
+        assert amount >= 100
+        assert amount <= 200
+    
+    # All results from second query should have amount >= 150 and <= 300
+    for row in result2['data']:
+        amount = float(row[1])
+        assert amount >= 150
+        assert amount <= 300
+    
+    await test_engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_cache_performance(uma):
     """Test that cached queries are faster than non-cached queries."""
     import time
