@@ -97,25 +97,19 @@ class JSQLExecutor:
                 # or embedded literal values (for queries without params)
                 # Map JSQL parameter names to SQL parameter names and execute
                 # params_mapping maps JSQL param names to SQL param names (bindparam keys)
+                sql_params = {}
+                # Add JSQL parameters if any
                 if cached.params_mapping and params:
-                    # Build SQL parameters for cached query
-                    # For SQLite: SQL was converted from ? to :param_name during caching
-                    # For other dialects: use named parameters directly
-                    # When same parameter is used multiple times, SQL contains :param_name multiple times
-                    # SQLite supports this - same named param can appear multiple times
-                    sql_params = {}
-                    # Add JSQL parameters
                     for jsql_param_name, sql_param_name in cached.params_mapping.items():
                         if jsql_param_name in params:
                             # Use JSQL param name in SQL (we replaced ? with :jsql_param_name during caching)
                             sql_params[jsql_param_name] = params[jsql_param_name]
-                    # Add literal parameters (SQLAlchemy-generated params for literals)
-                    # These are safe because values come from compiled.params, not user input
+                # Add literal parameters (SQLAlchemy-generated params for literals)
+                # These are safe because values come from compiled.params, not user input
+                # literal_params may exist even for queries without JSQL parameters
+                if cached.literal_params:
                     sql_params.update(cached.literal_params)
-                    result = await cls._execute_cached_query(cached.sql, sql_params, config.engine, debug_sql)
-                else:
-                    # No parameters - execute with empty params
-                    result = await cls._execute_cached_query(cached.sql, {}, config.engine, debug_sql)
+                result = await cls._execute_cached_query(cached.sql, sql_params, config.engine, debug_sql)
                 return result
 
         # Cache miss - extract entities from AST
@@ -154,6 +148,7 @@ class JSQLExecutor:
                 # Convert ? placeholders to named parameters (:param_name) for consistency
                 sql_str = str(compiled)
                 param_order = None
+                literal_params = {}  # Store values for SQLAlchemy-generated params (for security)
                 if config.engine.dialect.name == 'sqlite' and hasattr(compiled, 'positiontup') and compiled.positiontup:
                     # Replace ? with named parameters :param_name
                     # positiontup contains SQL param names in order they appear in SQL
@@ -161,7 +156,6 @@ class JSQLExecutor:
                     param_order = list(compiled.positiontup)
                     # Build mapping: SQL param name -> JSQL param name (for params that exist in params_mapping)
                     sql_to_jsql = {sql_name: jsql_name for jsql_name, sql_name in param_mapping.items()}
-                    literal_params = {}  # Store values for SQLAlchemy-generated params (for security)
                     for sql_param_name in param_order:
                         # Find corresponding JSQL param name
                         jsql_param_name = sql_to_jsql.get(sql_param_name)
