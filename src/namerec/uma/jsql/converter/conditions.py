@@ -20,6 +20,231 @@ from namerec.uma.jsql.converter.operators import SQLGLOT_TO_COMPARISON
 logger = logging.getLogger(__name__)
 
 
+def _extract_left_expression(cond_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Extract left expression from condition spec.
+    
+    Supports both old format ('field') and new format ('left').
+    
+    Args:
+        cond_spec: Condition specification
+        
+    Returns:
+        SQLGlot expression for left side
+        
+    Raises:
+        MissingFieldError: If neither 'field' nor 'left' is present
+    """
+    if 'left' in cond_spec:
+        return jsql_expression_to_sqlglot(cond_spec['left'])
+    elif 'field' in cond_spec:
+        return jsql_expression_to_sqlglot(cond_spec['field'])
+    else:
+        raise MissingFieldError('left or field', path='left/field', context='condition')
+
+
+def _extract_pattern(cond_spec: dict[str, Any]) -> str | None:
+    """
+    Extract pattern from condition spec for string operators.
+    
+    Supports both 'pattern' field and 'right' expression formats.
+    If 'right' is a string literal, extracts the value.
+    If 'right' is an expression, returns None (caller should use expression directly).
+    
+    Args:
+        cond_spec: Condition specification
+        
+    Returns:
+        Pattern string if found, None if should use expression directly
+    """
+    if 'pattern' in cond_spec:
+        return cond_spec['pattern']
+    
+    if 'right' in cond_spec:
+        right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
+        if isinstance(right_expr, exp.Literal) and right_expr.is_string:
+            return right_expr.this
+    
+    return None
+
+
+def convert_is_null(cond_spec: dict[str, Any]) -> exp.Expression:
+    """Convert IS NULL operator to sqlglot expression."""
+    left_expr = _extract_left_expression(cond_spec)
+    return exp.Is(this=left_expr, expression=exp.Null())
+
+
+def convert_is_not_null(cond_spec: dict[str, Any]) -> exp.Expression:
+    """Convert IS NOT NULL operator to sqlglot expression."""
+    left_expr = _extract_left_expression(cond_spec)
+    return exp.Not(this=exp.Is(this=left_expr, expression=exp.Null()))
+
+
+def convert_between(cond_spec: dict[str, Any], negate: bool = False) -> exp.Expression:
+    """
+    Convert BETWEEN operator to sqlglot expression.
+    
+    Args:
+        cond_spec: Condition specification
+        negate: Whether to negate (for NOT BETWEEN)
+        
+    Returns:
+        SQLGlot expression
+    """
+    if 'expr' not in cond_spec:
+        raise MissingFieldError('expr', path='expr', context='BETWEEN operator')
+    if 'low' not in cond_spec:
+        raise MissingFieldError('low', path='low', context='BETWEEN operator')
+    if 'high' not in cond_spec:
+        raise MissingFieldError('high', path='high', context='BETWEEN operator')
+    
+    expr = jsql_expression_to_sqlglot(cond_spec['expr'])
+    low_expr = jsql_expression_to_sqlglot(cond_spec['low'])
+    high_expr = jsql_expression_to_sqlglot(cond_spec['high'])
+    
+    logger.debug(f'Processing {"NOT " if negate else ""}BETWEEN operator')
+    between_expr = exp.Between(this=expr, low=low_expr, high=high_expr)
+    return exp.Not(this=between_expr) if negate else between_expr
+
+
+def convert_in_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Convert IN or NOT IN operator to sqlglot expression.
+    
+    Args:
+        op: Operator ('IN' or 'NOT IN')
+        cond_spec: Condition specification
+        
+    Returns:
+        SQLGlot expression
+    """
+    left_expr = _extract_left_expression(cond_spec)
+    negate = op == JSQLOperator.NOT_IN.value
+    
+    # Extract values or subquery
+    if 'values' in cond_spec:
+        values = cond_spec['values']
+    elif 'right' in cond_spec:
+        right_spec = cond_spec['right']
+        if isinstance(right_spec, dict) and 'values' in right_spec:
+            values = right_spec['values']
+        elif isinstance(right_spec, list):
+            values = right_spec
+        else:
+            # Subquery or single expression
+            right_expr = jsql_expression_to_sqlglot(right_spec)
+            in_expr = exp.In(this=left_expr, expressions=[right_expr])
+            return exp.NotIn(this=left_expr, expressions=[right_expr]) if negate else in_expr
+    else:
+        raise MissingFieldError('values or right', path='values/right', context=f'{op} operator')
+    
+    logger.debug(f'Processing {op} operator with {len(values)} values')
+    val_exprs = [jsql_expression_to_sqlglot({'value': v}) for v in values]
+    in_expr = exp.In(this=left_expr, expressions=val_exprs)
+    return exp.Not(this=in_expr) if negate else in_expr
+
+
+def convert_string_operator(
+    op: str,
+    cond_spec: dict[str, Any],
+    left_expr: exp.Expression
+) -> exp.Expression:
+    """
+    Convert string matching operator (LIKE, ILIKE, SIMILAR_TO, REGEXP, RLIKE) to sqlglot expression.
+    
+    Args:
+        op: String operator
+        cond_spec: Condition specification
+        left_expr: Left expression (already extracted)
+        
+    Returns:
+        SQLGlot expression
+    """
+    pattern = _extract_pattern(cond_spec)
+    
+    # If pattern is None, use right expression directly (might be column reference or function)
+    if pattern is None:
+        if 'right' not in cond_spec:
+            raise MissingFieldError('pattern or right', path='pattern/right', context=f'{op} operator')
+        right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
+        
+        # Map operator to SQLGlot class for expression-based matching
+        if op == JSQLOperator.LIKE.value:
+            return exp.Like(this=left_expr, expression=right_expr)
+        elif op == JSQLOperator.NOT_LIKE.value:
+            return exp.Not(this=exp.Like(this=left_expr, expression=right_expr))
+        elif op == JSQLOperator.ILIKE.value:
+            return exp.ILike(this=left_expr, expression=right_expr)
+        elif op == JSQLOperator.NOT_ILIKE.value:
+            return exp.NotILike(this=left_expr, expression=right_expr)
+        elif op == JSQLOperator.SIMILAR_TO.value:
+            return exp.SimilarTo(this=left_expr, expression=right_expr)
+        elif op == JSQLOperator.REGEXP.value:
+            return exp.RegexpLike(this=left_expr, expression=right_expr)
+        elif op == JSQLOperator.RLIKE.value:
+            return exp.RegexpLike(this=left_expr, expression=right_expr)
+        else:
+            raise UnknownOperatorError(operator=op, path='op', supported=[
+                JSQLOperator.LIKE.value, JSQLOperator.NOT_LIKE.value,
+                JSQLOperator.ILIKE.value, JSQLOperator.NOT_ILIKE.value,
+                JSQLOperator.SIMILAR_TO.value, JSQLOperator.REGEXP.value, JSQLOperator.RLIKE.value
+            ])
+    
+    # Use pattern as string literal
+    pattern_literal = exp.Literal.string(pattern)
+    logger.debug(f'Processing {op} operator with pattern: {pattern}')
+    
+    # Map operator to SQLGlot class for pattern-based matching
+    if op == JSQLOperator.LIKE.value:
+        return exp.Like(this=left_expr, expression=pattern_literal)
+    elif op == JSQLOperator.NOT_LIKE.value:
+        return exp.Not(this=exp.Like(this=left_expr, expression=pattern_literal))
+    elif op == JSQLOperator.ILIKE.value:
+        return exp.ILike(this=left_expr, expression=pattern_literal)
+    elif op == JSQLOperator.NOT_ILIKE.value:
+        return exp.NotILike(this=left_expr, expression=pattern_literal)
+    elif op == JSQLOperator.SIMILAR_TO.value:
+        return exp.SimilarTo(this=left_expr, expression=pattern_literal)
+    elif op == JSQLOperator.REGEXP.value:
+        return exp.RegexpLike(this=left_expr, expression=pattern_literal)
+    elif op == JSQLOperator.RLIKE.value:
+        return exp.RegexpLike(this=left_expr, expression=pattern_literal)
+    else:
+        raise UnknownOperatorError(operator=op, path='op', supported=[
+            JSQLOperator.LIKE.value, JSQLOperator.NOT_LIKE.value,
+            JSQLOperator.ILIKE.value, JSQLOperator.NOT_ILIKE.value,
+            JSQLOperator.SIMILAR_TO.value, JSQLOperator.REGEXP.value, JSQLOperator.RLIKE.value
+        ])
+
+
+def convert_standard_comparison(
+    op: str,
+    cond_spec: dict[str, Any],
+    left_expr: exp.Expression,
+    right_expr: exp.Expression
+) -> exp.Expression:
+    """
+    Convert standard comparison operator to sqlglot expression.
+    
+    Args:
+        op: Comparison operator
+        cond_spec: Condition specification
+        left_expr: Left expression
+        right_expr: Right expression
+        
+    Returns:
+        SQLGlot expression
+    """
+    operator_class = COMPARISON_OP_TO_SQLGLOT.get(op)
+    if not operator_class:
+        raise UnknownOperatorError(
+            operator=op,
+            path='op',
+            supported=list(COMPARISON_OP_TO_SQLGLOT.keys())
+        )
+    return operator_class(this=left_expr, expression=right_expr)
+
+
 def jsql_condition_to_sqlglot(cond_spec: dict[str, Any]) -> exp.Expression:
     """
     Convert JSQL condition to sqlglot expression.
@@ -224,82 +449,46 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
     """
     logger.debug(f'Converting comparison operator: {op}')
 
-    # Handle IS NULL and IS NOT NULL first (before left/right processing)
+    # Handle IS NULL and IS NOT NULL first
     if op == JSQLOperator.IS_NULL.value:
-        # Support both formats: 'field' or 'left'
-        if 'field' in cond_spec:
-            left_expr = jsql_expression_to_sqlglot(cond_spec['field'])
-        elif 'left' in cond_spec:
-            left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-        else:
-            raise MissingFieldError('field or left', path='field/left', context='IS NULL operator')
-        return exp.Is(this=left_expr, expression=exp.Null())
-
-    if op == JSQLOperator.IS_NOT_NULL.value:
-        # Support both formats: 'field' or 'left'
-        if 'field' in cond_spec:
-            left_expr = jsql_expression_to_sqlglot(cond_spec['field'])
-        elif 'left' in cond_spec:
-            left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-        else:
-            raise MissingFieldError('field or left', path='field/left', context='IS NOT NULL operator')
-        return exp.Not(this=exp.Is(this=left_expr, expression=exp.Null()))
-
-    # Handle BETWEEN and NOT BETWEEN first, as they have different structure
-    if op == JSQLOperator.BETWEEN.value:
-        if 'expr' not in cond_spec:
-            raise MissingFieldError('expr', path='expr', context='BETWEEN operator')
-        if 'low' not in cond_spec:
-            raise MissingFieldError('low', path='low', context='BETWEEN operator')
-        if 'high' not in cond_spec:
-            raise MissingFieldError('high', path='high', context='BETWEEN operator')
-
-        expr = jsql_expression_to_sqlglot(cond_spec['expr'])
-        low_expr = jsql_expression_to_sqlglot(cond_spec['low'])
-        high_expr = jsql_expression_to_sqlglot(cond_spec['high'])
-
-        logger.debug('Processing BETWEEN operator')
-        return exp.Between(this=expr, low=low_expr, high=high_expr)
-
-    if op == JSQLOperator.NOT_BETWEEN.value:
-        if 'expr' not in cond_spec:
-            raise MissingFieldError('expr', path='expr', context='NOT BETWEEN operator')
-        if 'low' not in cond_spec:
-            raise MissingFieldError('low', path='low', context='NOT BETWEEN operator')
-        if 'high' not in cond_spec:
-            raise MissingFieldError('high', path='high', context='NOT BETWEEN operator')
-
-        expr = jsql_expression_to_sqlglot(cond_spec['expr'])
-        low_expr = jsql_expression_to_sqlglot(cond_spec['low'])
-        high_expr = jsql_expression_to_sqlglot(cond_spec['high'])
-
-        logger.debug('Processing NOT BETWEEN operator')
-        # sqlglot doesn't have NotBetween, use Not(Between(...))
-        between_expr = exp.Between(this=expr, low=low_expr, high=high_expr)
-        return exp.Not(this=between_expr)
-
-    # For IN/NOT IN, check for values first (before left/right processing)
-    if op in (JSQLOperator.IN.value, JSQLOperator.NOT_IN.value):
-        if 'values' in cond_spec:
-            # Direct values format
-            pass  # Will be handled in IN/NOT IN section below
-        elif 'right' in cond_spec and isinstance(cond_spec['right'], dict) and 'values' in cond_spec['right']:
-            # right: {values: [...]} format
-            cond_spec['values'] = cond_spec['right']['values']
-        elif 'right' in cond_spec and isinstance(cond_spec['right'], list):
-            # right: [...] format
-            cond_spec['values'] = cond_spec['right']
+        return convert_is_null(cond_spec)
     
+    if op == JSQLOperator.IS_NOT_NULL.value:
+        return convert_is_not_null(cond_spec)
+
+    # Handle BETWEEN and NOT BETWEEN
+    if op == JSQLOperator.BETWEEN.value:
+        return convert_between(cond_spec, negate=False)
+    
+    if op == JSQLOperator.NOT_BETWEEN.value:
+        return convert_between(cond_spec, negate=True)
+
+    # Handle IN and NOT IN
+    if op in (JSQLOperator.IN.value, JSQLOperator.NOT_IN.value):
+        return convert_in_operator(op, cond_spec)
+
+    # Handle string matching operators (before extracting right_expr)
+    string_operators = {
+        JSQLOperator.LIKE.value,
+        JSQLOperator.NOT_LIKE.value,
+        JSQLOperator.ILIKE.value,
+        JSQLOperator.NOT_ILIKE.value,
+        JSQLOperator.SIMILAR_TO.value,
+        JSQLOperator.REGEXP.value,
+        JSQLOperator.RLIKE.value,
+    }
+    if op in string_operators:
+        left_expr = _extract_left_expression(cond_spec)
+        return convert_string_operator(op, cond_spec, left_expr)
+
+    # Extract left and right expressions for standard comparison operators
     # Check for new format (left/right) first
     if 'left' in cond_spec and 'right' in cond_spec:
-        # For IN/NOT IN, skip normal left/right processing if we have values
-        if op not in (JSQLOperator.IN.value, JSQLOperator.NOT_IN.value):
-            left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
+        left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
+        right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
     # Fall back to old format (field/value)
     elif 'field' in cond_spec:
         left_expr = jsql_expression_to_sqlglot(cond_spec['field'])
-
         # Get right side (value or right_field)
         if 'value' in cond_spec:
             right_expr = jsql_expression_to_sqlglot({'value': cond_spec['value']})
@@ -318,171 +507,10 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
             context='comparison operation requires left and right operands'
         )
 
-    # Handle standard comparison operators using mapping
+    # Handle standard comparison operators
     operator_class = COMPARISON_OP_TO_SQLGLOT.get(op)
     if operator_class:
-        return operator_class(this=left_expr, expression=right_expr)
-
-    # Handle special operators
-    if op == JSQLOperator.IN.value:
-        # Get left_expr if not already set
-        if 'left' in cond_spec:
-            left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-        
-        # Support both formats: 'values' field or 'right' with 'values'
-        if 'values' in cond_spec:
-            values = cond_spec['values']
-        elif 'right' in cond_spec:
-            right_spec = cond_spec['right']
-            if isinstance(right_spec, dict) and 'values' in right_spec:
-                values = right_spec['values']
-            elif isinstance(right_spec, list):
-                values = right_spec
-            else:
-                # Subquery or single expression
-                right_expr = jsql_expression_to_sqlglot(right_spec)
-                return exp.In(this=left_expr, expressions=[right_expr])
-        else:
-            raise MissingFieldError('values or right', path='values/right', context='IN operator')
-        logger.debug(f'Processing IN operator with {len(values)} values')
-        val_exprs = [jsql_expression_to_sqlglot({'value': v}) for v in values]
-        return exp.In(this=left_expr, expressions=val_exprs)
-
-    if op == JSQLOperator.NOT_IN.value:
-        # Get left_expr if not already set
-        if 'left' in cond_spec:
-            left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-        
-        # Support both formats: 'values' field or 'right' with 'values'
-        if 'values' in cond_spec:
-            values = cond_spec['values']
-        elif 'right' in cond_spec:
-            right_spec = cond_spec['right']
-            if isinstance(right_spec, dict) and 'values' in right_spec:
-                values = right_spec['values']
-            elif isinstance(right_spec, list):
-                values = right_spec
-            else:
-                right_expr = jsql_expression_to_sqlglot(right_spec)
-                return exp.NotIn(this=left_expr, expressions=[right_expr])
-        else:
-            raise MissingFieldError('values or right', path='values/right', context='NOT IN operator')
-        logger.debug(f'Processing NOT IN operator with {len(values)} values')
-        val_exprs = [jsql_expression_to_sqlglot({'value': v}) for v in values]
-        # sqlglot doesn't have NotIn, use Not(In(...))
-        in_expr = exp.In(this=left_expr, expressions=val_exprs)
-        return exp.Not(this=in_expr)
-
-    if op == JSQLOperator.LIKE.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            # Extract string value from expression
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                # Use expression as-is (might be a column reference or function)
-                return exp.Like(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='LIKE operator')
-        logger.debug(f'Processing LIKE operator with pattern: {pattern}')
-        return exp.Like(this=left_expr, expression=exp.Literal.string(pattern))
-
-    if op == JSQLOperator.NOT_LIKE.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                return exp.NotLike(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='NOT LIKE operator')
-        logger.debug(f'Processing NOT LIKE operator with pattern: {pattern}')
-        # sqlglot doesn't have NotLike, use Not(Like(...))
-        like_expr = exp.Like(this=left_expr, expression=exp.Literal.string(pattern))
-        return exp.Not(this=like_expr)
-
-    if op == JSQLOperator.ILIKE.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                return exp.ILike(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='ILIKE operator')
-        logger.debug(f'Processing ILIKE operator with pattern: {pattern}')
-        return exp.ILike(this=left_expr, expression=exp.Literal.string(pattern))
-
-    if op == JSQLOperator.NOT_ILIKE.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                return exp.NotILike(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='NOT ILIKE operator')
-        logger.debug(f'Processing NOT ILIKE operator with pattern: {pattern}')
-        return exp.NotILike(this=left_expr, expression=exp.Literal.string(pattern))
-
-    if op == JSQLOperator.SIMILAR_TO.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                return exp.SimilarTo(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='SIMILAR TO operator')
-        logger.debug(f'Processing SIMILAR TO operator with pattern: {pattern}')
-        return exp.SimilarTo(this=left_expr, expression=exp.Literal.string(pattern))
-
-    if op == JSQLOperator.REGEXP.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                return exp.RegexpLike(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='REGEXP operator')
-        logger.debug(f'Processing REGEXP operator with pattern: {pattern}')
-        return exp.RegexpLike(this=left_expr, expression=exp.Literal.string(pattern))
-
-    if op == JSQLOperator.RLIKE.value:
-        # Support both formats: 'pattern' field or 'right' expression
-        if 'pattern' in cond_spec:
-            pattern = cond_spec['pattern']
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-            if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-                pattern = right_expr.this
-            else:
-                return exp.RegexpLike(this=left_expr, expression=right_expr)
-        else:
-            raise MissingFieldError('pattern or right', path='pattern/right', context='RLIKE operator')
-        logger.debug(f'Processing RLIKE operator with pattern: {pattern}')
-        # RLIKE is alias for REGEXP in MySQL
-        return exp.RegexpLike(this=left_expr, expression=exp.Literal.string(pattern))
-
+        return convert_standard_comparison(op, cond_spec, left_expr, right_expr)
 
     # Unknown operator
     supported = list(COMPARISON_OP_TO_SQLGLOT.keys()) + [

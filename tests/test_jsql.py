@@ -851,7 +851,7 @@ async def test_bindparam_key_preservation(uma):
     
     # Create bindparam with explicit key
     param_name = 'test_param'
-    bp = bindparam(param_name, value=None, key=param_name)
+    bp = bindparam(key=param_name, value=None)
     
     # Build query with bindparam
     query = select(test_table.c.id).where(test_table.c.value == bp)

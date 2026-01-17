@@ -370,6 +370,18 @@ class JSQLParser:
         except (UMANotFoundError, RuntimeError) as e:
             raise JSQLSyntaxError(f'Table "{entity_name}" not found: {e}') from e
 
+    def _extract_expression_type(self, expr: ColumnElement) -> Any | None:
+        """
+        Extract type from SQLAlchemy expression.
+
+        Args:
+            expr: SQLAlchemy column element
+
+        Returns:
+            Expression type or None if not available
+        """
+        return getattr(expr, 'type', None)
+
     def _apply_alias(self, expression: ColumnElement, alias_name: str | None) -> ColumnElement:
         """
         Apply alias to expression and register it.
@@ -701,77 +713,101 @@ class JSQLParser:
         expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
         return expr.isnot(None)
 
-    async def _handle_like(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle LIKE operator."""
+    async def _handle_string_operator(
+        self,
+        condition_spec: JSQLExpression,
+        operator: JSQLOperator,
+        negate: bool = False
+    ) -> ClauseElement:
+        """
+        Handle string matching operators (LIKE, ILIKE, SIMILAR TO, REGEXP, RLIKE).
+
+        Args:
+            condition_spec: JSQL condition specification
+            operator: String operator to handle
+            negate: Whether to negate the result (for NOT operators)
+
+        Returns:
+            SQLAlchemy clause element
+        """
         if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.LIKE.value} operator must have "{JSQLField.LEFT.value}" field')
+            raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.LEFT.value}" field')
         if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.LIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
+            raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.RIGHT.value}" field')
 
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        # Extract type from left expression to use for right expression
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        left_type = self._extract_expression_type(left)
         right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        return left.like(right)
+
+        # Map operator to SQLAlchemy method
+        if operator == JSQLOperator.LIKE:
+            result = left.like(right)
+        elif operator == JSQLOperator.ILIKE:
+            result = left.ilike(right)
+        elif operator == JSQLOperator.SIMILAR_TO:
+            # SQLAlchemy doesn't have built-in SIMILAR TO, use op() method
+            result = left.op('SIMILAR TO')(right)
+        elif operator == JSQLOperator.REGEXP:
+            # SQLAlchemy uses regexp_match or op() method depending on dialect
+            result = left.op('REGEXP')(right)
+        elif operator == JSQLOperator.RLIKE:
+            # RLIKE is MySQL alias for REGEXP
+            result = left.op('RLIKE')(right)
+        else:
+            raise JSQLSyntaxError(f'Unknown string operator: {operator.value}')
+
+        return ~result if negate else result
+
+    async def _handle_like(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle LIKE operator."""
+        return await self._handle_string_operator(condition_spec, JSQLOperator.LIKE, negate=False)
 
     async def _handle_not_like(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle NOT LIKE operator."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_LIKE.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_LIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        return ~left.like(right)
+        return await self._handle_string_operator(condition_spec, JSQLOperator.LIKE, negate=True)
 
     async def _handle_ilike(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle ILIKE operator."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.ILIKE.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.ILIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        # Extract type from left expression to use for right expression
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        return left.ilike(right)
+        return await self._handle_string_operator(condition_spec, JSQLOperator.ILIKE, negate=False)
 
     async def _handle_not_ilike(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle NOT ILIKE operator."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_ILIKE.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_ILIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
+        return await self._handle_string_operator(condition_spec, JSQLOperator.ILIKE, negate=True)
 
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        return ~left.ilike(right)
-
-    async def _handle_between(self, condition_spec: JSQLExpression) -> ClauseElement:
+    async def _handle_between(
+        self,
+        condition_spec: JSQLExpression,
+        negate: bool = False
+    ) -> ClauseElement:
         """
-        Handle BETWEEN operator.
-        
+        Handle BETWEEN operator (with optional negation).
+
         JSQL format: {"op": "BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
-        SQL equivalent: expr BETWEEN low AND high
+        SQL equivalent: expr BETWEEN low AND high (or NOT BETWEEN if negate=True)
+
+        Args:
+            condition_spec: JSQL condition specification
+            negate: Whether to negate the result (for NOT BETWEEN)
+
+        Returns:
+            SQLAlchemy clause element
         """
+        operator = JSQLOperator.NOT_BETWEEN if negate else JSQLOperator.BETWEEN
+        
         if JSQLField.EXPR.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.BETWEEN.value} must have "{JSQLField.EXPR.value}" field')
+            raise JSQLSyntaxError(f'{operator.value} must have "{JSQLField.EXPR.value}" field')
         if 'low' not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.BETWEEN.value} must have "low" field')
+            raise JSQLSyntaxError(f'{operator.value} must have "low" field')
         if 'high' not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.BETWEEN.value} must have "high" field')
+            raise JSQLSyntaxError(f'{operator.value} must have "high" field')
 
         expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
-        # Extract type from expression to use for low/high bounds
-        expr_type = getattr(expr, 'type', None) if hasattr(expr, 'type') else None
+        expr_type = self._extract_expression_type(expr)
         low = await self._build_expression(condition_spec['low'], expected_type=expr_type)
         high = await self._build_expression(condition_spec['high'], expected_type=expr_type)
         
-        return expr.between(low, high)
+        result = expr.between(low, high)
+        return ~result if negate else result
 
     async def _handle_not_between(self, condition_spec: JSQLExpression) -> ClauseElement:
         """
@@ -780,62 +816,19 @@ class JSQLParser:
         JSQL format: {"op": "NOT BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
         SQL equivalent: expr NOT BETWEEN low AND high
         """
-        if JSQLField.EXPR.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_BETWEEN.value} must have "{JSQLField.EXPR.value}" field')
-        if 'low' not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_BETWEEN.value} must have "low" field')
-        if 'high' not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_BETWEEN.value} must have "high" field')
-
-        expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
-        # Extract type from expression to use for low/high bounds
-        expr_type = getattr(expr, 'type', None) if hasattr(expr, 'type') else None
-        low = await self._build_expression(condition_spec['low'], expected_type=expr_type)
-        high = await self._build_expression(condition_spec['high'], expected_type=expr_type)
-        
-        return ~expr.between(low, high)
+        return await self._handle_between(condition_spec, negate=True)
 
     async def _handle_similar_to(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle SIMILAR TO operator (PostgreSQL regex pattern matching)."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.SIMILAR_TO.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.SIMILAR_TO.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        
-        # SQLAlchemy doesn't have built-in SIMILAR TO, use op() method
-        return left.op('SIMILAR TO')(right)
+        return await self._handle_string_operator(condition_spec, JSQLOperator.SIMILAR_TO, negate=False)
 
     async def _handle_regexp(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle REGEXP operator (MySQL/PostgreSQL regex pattern matching)."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.REGEXP.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.REGEXP.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        
-        # SQLAlchemy uses regexp_match or op() method depending on dialect
-        return left.op('REGEXP')(right)
+        return await self._handle_string_operator(condition_spec, JSQLOperator.REGEXP, negate=False)
 
     async def _handle_rlike(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle RLIKE operator (MySQL regex pattern matching, alias for REGEXP)."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.RLIKE.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.RLIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-        
-        # RLIKE is MySQL alias for REGEXP
-        return left.op('RLIKE')(right)
+        return await self._handle_string_operator(condition_spec, JSQLOperator.RLIKE, negate=False)
 
     async def _build_condition(self, condition_spec: JSQLExpression) -> ClauseElement:
         """
@@ -911,10 +904,10 @@ class JSQLParser:
             # Value will be provided at execution time from self.params
             if expected_type is not None:
                 # Use bindparam with type annotation and explicit key for proper type handling
-                param_bind = bindparam(param_name, value=None, type_=expected_type, key=param_name)
+                param_bind = bindparam(key=param_name, value=None, type_=expected_type)
             else:
                 # Use bindparam with explicit key to preserve parameter name
-                param_bind = bindparam(param_name, value=None, key=param_name)
+                param_bind = bindparam(key=param_name, value=None)
             # Store mapping: JSQL param name -> bindparam object for later use in executor
             self._param_bindparams[param_name] = param_bind
             return param_bind
