@@ -38,10 +38,16 @@ def jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expressio
             return convert_function_call(expr_spec)
         if 'op' in expr_spec:
             return convert_arithmetic_op(expr_spec)
+        # Check for subquery (full query dictionary)
+        if 'from' in expr_spec and 'select' in expr_spec:
+            # This looks like a subquery - convert it and wrap in Subquery
+            from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot
+            subquery_select = jsql_query_to_sqlglot(expr_spec)
+            return exp.Subquery(this=subquery_select)
 
         # If we get here, the dict doesn't match any known pattern
         raise InvalidExpressionError(
-            message="Expression must contain one of: 'field', 'value', 'func', or 'op'",
+            message="Expression must contain one of: 'field', 'value', 'func', 'op', or subquery ('from')",
             path='',
             expression=expr_spec
         )
