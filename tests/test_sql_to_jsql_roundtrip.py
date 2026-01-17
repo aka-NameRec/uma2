@@ -378,11 +378,10 @@ def _compare_jsql_detailed(jsql1: dict[str, Any], jsql2: dict[str, Any]) -> str:
 
 
 # Known limitations:
-# - RLIKE: SQLite converts RLIKE to REGEXP, so roundtrip changes RLIKE to REGEXP (semantically equivalent)
-#   This is acceptable as REGEXP and RLIKE are semantically equivalent operators
-KNOWN_LIMITATIONS = {
-    'pattern_matching_rlike',  # RLIKE gets converted to REGEXP in SQLite (semantically equivalent, acceptable)
-}
+# - None currently - all tests should pass with proper normalization
+# Note: RLIKE gets converted to REGEXP in SQLite, but this is handled by normalization
+# in _normalize_condition() which converts RLIKE to REGEXP for comparison
+KNOWN_LIMITATIONS: set[str] = set()
 
 
 @pytest.mark.parametrize('test_case', JSQL_TO_SQL_TEST_CASES, ids=lambda tc: tc['name'])

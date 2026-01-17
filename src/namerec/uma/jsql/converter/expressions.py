@@ -94,10 +94,22 @@ def convert_function_call(expr_spec: dict[str, Any]) -> exp.Expression:
     ]
     logger.debug(f'Function {func} has {len(args)} arguments')
 
+    # Handle DISTINCT flag (for COUNT(DISTINCT ...), SUM(DISTINCT ...), etc.)
+    # In sqlglot, DISTINCT is represented as Distinct wrapping the first argument
+    distinct = expr_spec.get('distinct', False)
+    if distinct and args:
+        # Wrap the first argument in Distinct
+        # In sqlglot, Distinct uses 'expressions' list
+        args[0] = exp.Distinct(expressions=[args[0]])
+
     # Try to find specific sqlglot function class
     func_class = getattr(exp, func.upper(), None)
     if func_class and issubclass(func_class, exp.Func):
         logger.debug(f'Using specific sqlglot function: {func_class.__name__}')
+        # For functions with DISTINCT, pass the Distinct-wrapped argument as 'this'
+        if distinct and args:
+            # In sqlglot, Count(DISTINCT x) is Count(this=Distinct(...))
+            return func_class(this=args[0], expressions=args[1:])
         return func_class(*args)
 
     # Fallback to generic Anonymous function
@@ -251,22 +263,96 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
             
             return result
 
+    # Handle DISTINCT (typically wrapping aggregate function arguments)
+    # In sqlglot, COUNT(DISTINCT x) is represented as Count(this=Distinct(expressions=[Column(...)]))
+    # Distinct uses 'expressions' list, not 'this'
+    if isinstance(expr, exp.Distinct):
+        # DISTINCT can wrap:
+        # 1. Column references: DISTINCT column (rare, but possible)
+        # 2. Function arguments: COUNT(DISTINCT column) - most common case
+        # 3. Expressions: DISTINCT (a + b) (rare)
+        
+        # In sqlglot, Distinct uses 'expressions' list, not 'this'
+        # Get the first expression (typically there's only one in COUNT(DISTINCT ...))
+        if expr.expressions and len(expr.expressions) > 0:
+            inner_expr = expr.expressions[0]
+            inner_jsql = convert_expression_to_jsql(inner_expr)
+            
+            # Return a marker indicating this should be distinct
+            # The caller (function handler) should check for this
+            if isinstance(inner_jsql, dict):
+                inner_jsql['_distinct_marker'] = True
+                return inner_jsql
+            
+            return inner_jsql
+        else:
+            # Fallback: check 'this' (might be used in some cases)
+            inner_expr = expr.this
+            if inner_expr is None:
+                raise InvalidExpressionError(
+                    message='DISTINCT must wrap an expression',
+                    path='',
+                    expression={'type': 'Distinct', 'expressions': expr.expressions, 'this': None}
+                )
+            
+            inner_jsql = convert_expression_to_jsql(inner_expr)
+            if isinstance(inner_jsql, dict):
+                inner_jsql['_distinct_marker'] = True
+                return inner_jsql
+            
+            return inner_jsql
+
     # Handle functions
     if isinstance(expr, exp.Func):
         func_name = expr.sql_name()
-        # Single pass: type check, convert, and filter in one comprehension
-        # After error handling fix, None won't be returned, but we still filter
-        # for cases where conversion might fail (shouldn't happen, but defensive)
-        args = [
-            converted
-            for arg in expr.args.values()
-            if isinstance(arg, exp.Expression) and (converted := convert_expression_to_jsql(arg)) is not None
-        ]
+        args = []
+        first_arg_is_distinct = False
+        
+        # Process function arguments
+        for idx, arg in enumerate(expr.args.values()):
+            if isinstance(arg, exp.Expression):
+                # Check if this argument is wrapped in Distinct
+                if isinstance(arg, exp.Distinct):
+                    # Unwrap and convert the inner expression
+                    # Distinct uses 'expressions' list, not 'this'
+                    if arg.expressions and len(arg.expressions) > 0:
+                        inner_expr = arg.expressions[0]
+                    else:
+                        inner_expr = arg.this
+                        if inner_expr is None:
+                            raise InvalidExpressionError(
+                                message='DISTINCT must wrap an expression',
+                                path='',
+                                expression={'type': 'Distinct', 'expressions': arg.expressions, 'this': None}
+                            )
+                    converted = convert_expression_to_jsql(inner_expr)
+                    args.append(converted)
+                    # Mark first argument as distinct if it's the first one
+                    # (This covers the common case of COUNT(DISTINCT column))
+                    if idx == 0:
+                        first_arg_is_distinct = True
+                else:
+                    converted = convert_expression_to_jsql(arg)
+                    # Check if conversion returned a dict with distinct marker
+                    if isinstance(converted, dict) and converted.get('_distinct_marker'):
+                        # Remove the marker and mark this arg as distinct
+                        del converted['_distinct_marker']
+                        args.append(converted)
+                        if idx == 0:
+                            first_arg_is_distinct = True
+                    else:
+                        args.append(converted)
 
-        return {
+        result = {
             'func': func_name,
             'args': args,
         }
+        
+        # Set distinct flag if first argument is distinct
+        if first_arg_is_distinct:
+            result['distinct'] = True
+        
+        return result
 
     # Handle Concat (string concatenation ||)
     if isinstance(expr, exp.Concat):

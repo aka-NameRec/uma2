@@ -290,7 +290,8 @@ def convert_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     # Import from jsql_to_sql to avoid circular dependency
     from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot_select
     subquery = jsql_query_to_sqlglot_select(subquery_spec)
-    return exp.Exists(expression=subquery)
+    # In sqlglot, Exists uses 'this' parameter, not 'expression'
+    return exp.Exists(this=subquery)
 
 
 def convert_not_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
@@ -301,7 +302,8 @@ def convert_not_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     # Import from jsql_to_sql to avoid circular dependency
     from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot_select
     subquery = jsql_query_to_sqlglot_select(subquery_spec)
-    return exp.NotExists(expression=subquery)
+    # In sqlglot, NotExists uses 'this' parameter, not 'expression'
+    return exp.NotExists(this=subquery)
 
 
 def _make_string_handler(op: str):
@@ -363,23 +365,42 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
     if 'left' in cond_spec and 'right' in cond_spec:
         left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
         right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-    # Fall back to old format (field/value)
-    elif 'field' in cond_spec:
-        left_expr = jsql_expression_to_sqlglot(cond_spec['field'])
-        # Get right side (value or right_field)
+    # Check for new format with left expression and right value/field/expression
+    elif 'left' in cond_spec:
+        left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
+        # Get right side
         if 'value' in cond_spec:
             right_expr = jsql_expression_to_sqlglot({'value': cond_spec['value']})
         elif 'right_field' in cond_spec:
             right_expr = jsql_expression_to_sqlglot(cond_spec['right_field'])
+        elif 'right' in cond_spec:
+            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
         else:
             raise MissingFieldError(
-                'value or right_field',
+                'value, right_field, or right',
+                path='',
+                context='comparison requires right operand'
+            )
+    # Fall back to old format (field/value/right_field/right)
+    elif 'field' in cond_spec:
+        left_expr = jsql_expression_to_sqlglot(cond_spec['field'])
+        # Get right side (value, right_field, or right expression)
+        if 'value' in cond_spec:
+            right_expr = jsql_expression_to_sqlglot({'value': cond_spec['value']})
+        elif 'right_field' in cond_spec:
+            right_expr = jsql_expression_to_sqlglot(cond_spec['right_field'])
+        elif 'right' in cond_spec:
+            # Right side is a full expression (function, subquery, etc.)
+            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
+        else:
+            raise MissingFieldError(
+                'value, right_field, or right',
                 path='',
                 context='comparison requires right operand'
             )
     else:
         raise MissingFieldError(
-            'left/right or field',
+            'left/right, left, or field',
             path='',
             context='comparison operation requires left and right operands'
         )

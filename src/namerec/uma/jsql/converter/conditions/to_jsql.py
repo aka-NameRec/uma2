@@ -366,23 +366,44 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
         left = convert_expression_to_jsql(expr.left)
         right = convert_expression_to_jsql(expr.right)
 
-        field = validate_field_reference(left, 'Comparison operator', 'left')
-
         result: dict[str, Any] = {
-            'field': field,
             'op': op,
         }
 
+        # Left side can be a field reference, function call, or expression
+        # (e.g., COUNT(...) in HAVING, or column in WHERE)
+        if 'field' in left:
+            result['field'] = left['field']
+        elif 'func' in left:
+            # Left side is a function call (e.g., COUNT(...), SUM(...) in HAVING)
+            result['left'] = left
+        elif 'op' in left:
+            # Left side is an expression (e.g., arithmetic operation)
+            result['left'] = left
+        else:
+            raise InvalidExpressionError(
+                message='Comparison operator left side must be a field reference, function call, or expression',
+                path='left',
+                expression=left
+            )
+
+        # Right side can be a value, field reference, function call, or subquery
         if 'value' in right:
             result['value'] = right['value']
         elif 'field' in right:
             result['right_field'] = right['field']
+        elif 'func' in right:
+            # Right side is a function call (e.g., CURRENT_DATE, NOW(), etc.)
+            result['right'] = right
         elif 'from' in right and 'select' in right:
             # Right side is a subquery
             result['right'] = right
+        elif 'op' in right:
+            # Right side is an expression (e.g., arithmetic operation)
+            result['right'] = right
         else:
             raise InvalidExpressionError(
-                message='Comparison operator right side must be a value, field reference, or subquery',
+                message='Comparison operator right side must be a value, field reference, function call, expression, or subquery',
                 path='right',
                 expression=right
             )
@@ -399,7 +420,6 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
             query_expr = expr.args['query']
             if isinstance(query_expr, exp.Subquery):
                 # IN with subquery
-                from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
                 # query_expr.this might be another Subquery (nested) or Select
                 select_expr = query_expr.this
                 if isinstance(select_expr, exp.Subquery):
@@ -418,7 +438,6 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
             first_expr = expr.expressions[0]
             if isinstance(first_expr, exp.Subquery):
                 # IN with subquery
-                from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
                 subquery_jsql = convert_sqlglot_select_to_jsql(first_expr.this)
                 return {
                     'field': field,
