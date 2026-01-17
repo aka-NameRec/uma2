@@ -56,8 +56,9 @@ class JSQLParser:
         self._param_counter = 0  # Counter for generating unique parameter names
         # Map JSQL parameter names to bindparam objects for proper parameter mapping
         self._param_bindparams: dict[str, Any] = {}  # JSQL param name -> bindparam object
-        # Cache for resolved columns: (field_spec, from_clause_id) -> Column | ColumnElement
-        self._column_cache: dict[tuple[str, int | None], Column | ColumnElement] = {}
+        # Cache for resolved columns: (field_spec, table_id) -> Column | ColumnElement
+        # Uses table identifier (name/schema) instead of object id for stable caching
+        self._column_cache: dict[tuple[str, str | None], Column | ColumnElement] = {}
 
         # Initialize operator handlers
         self._logical_handler = LogicalOperatorHandler(self)
@@ -488,6 +489,32 @@ class JSQLParser:
 
         return items
 
+    def _get_table_identifier(self, from_clause: Table | None) -> str | None:
+        """
+        Extract stable table identifier for cache key.
+        
+        Uses table name and schema instead of object id() for stable caching
+        that works across different queries and parser instances.
+        
+        Args:
+            from_clause: SQLAlchemy Table object or None
+            
+        Returns:
+            Table identifier string (e.g., "schema.table" or "table") or None
+        """
+        if from_clause is None:
+            return None
+        
+        if isinstance(from_clause, Table):
+            table_name = from_clause.name
+            if from_clause.schema:
+                return f"{from_clause.schema}.{table_name}"
+            return table_name
+        
+        # For aliases or other types, use string representation
+        # This is less ideal but maintains backward compatibility
+        return str(from_clause)
+
     async def _resolve_column(self, field_spec: str, from_clause: Any) -> Column | ColumnElement:
         """
         Resolve column reference (e.g., 'users.id' or 'id') with caching.
@@ -502,10 +529,11 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If column not found
         """
-        # Create cache key: (field_spec, from_clause_id)
-        # Use id() for from_clause to handle different table objects
-        from_clause_id = id(from_clause) if from_clause is not None else None
-        cache_key = (field_spec, from_clause_id)
+        # Create cache key: (field_spec, table_identifier)
+        # Use table identifier (name/schema) instead of id() for stable caching
+        # This allows cache to work across different queries for the same table
+        table_id = self._get_table_identifier(from_clause)
+        cache_key = (field_spec, table_id)
         
         # Check cache first
         if cache_key in self._column_cache:

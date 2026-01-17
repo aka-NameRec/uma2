@@ -156,13 +156,17 @@ class JSQLExecutor:
                     param_order = list(compiled.positiontup)
                     # Build mapping: SQL param name -> JSQL param name (for params that exist in params_mapping)
                     sql_to_jsql = {sql_name: jsql_name for jsql_name, sql_name in param_mapping.items()}
+                    
+                    # Build replacement list in order (one-pass approach for O(n) complexity)
+                    # Instead of replacing in loop (O(n²)), build list of replacements and apply once
+                    replacements: list[str] = []
                     for sql_param_name in param_order:
                         # Find corresponding JSQL param name
                         jsql_param_name = sql_to_jsql.get(sql_param_name)
                         if jsql_param_name:
-                            # Replace ? with :jsql_param_name (use JSQL name for consistency)
+                            # Use JSQL name for consistency
                             # When same JSQL param is used multiple times, all ? will be replaced with same name
-                            sql_str = sql_str.replace('?', f':{jsql_param_name}', 1)
+                            replacements.append(f':{jsql_param_name}')
                         else:
                             # SQLAlchemy-generated param (param_1, param_2, etc.) for literals
                             # Store value and use named param to avoid SQL injection
@@ -170,11 +174,44 @@ class JSQLExecutor:
                                 literal_value = compiled.params[sql_param_name]
                                 # Store value for later use with bindparam()
                                 literal_params[sql_param_name] = literal_value
-                                # Replace ? with named param (will be bound via bindparam() for security)
-                                sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
+                                # Use named param (will be bound via bindparam() for security)
+                                replacements.append(f':{sql_param_name}')
                             else:
                                 # Fallback: keep as named param (shouldn't happen)
-                                sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
+                                replacements.append(f':{sql_param_name}')
+                    
+                    # Apply all replacements in single pass: split by '?' and join with replacements
+                    # This is O(n) instead of O(n²) for n parameters
+                    parts = sql_str.split('?')
+                    if len(parts) == len(replacements) + 1:
+                        # Build result string by interleaving parts and replacements
+                        result_parts: list[str] = []
+                        for i, part in enumerate(parts):
+                            result_parts.append(part)
+                            if i < len(replacements):
+                                result_parts.append(replacements[i])
+                        sql_str = ''.join(result_parts)
+                    else:
+                        # Fallback: if count doesn't match, use old approach (shouldn't happen)
+                        # This preserves original behavior if something unexpected occurs
+                        # Log warning to detect unexpected cases
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(
+                            f'Parameter count mismatch in SQL replacement: '
+                            f'{len(parts)} parts, {len(replacements)} replacements. '
+                            f'Using fallback O(n²) approach. This should not happen in normal operation.'
+                        )
+                        for i, sql_param_name in enumerate(param_order):
+                            jsql_param_name = sql_to_jsql.get(sql_param_name)
+                            if jsql_param_name:
+                                sql_str = sql_str.replace('?', f':{jsql_param_name}', 1)
+                            else:
+                                if sql_param_name in compiled.params:
+                                    literal_params[sql_param_name] = compiled.params[sql_param_name]
+                                    sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
+                                else:
+                                    sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
                 
                 # Cache SQL with parameter placeholders
                 # If query has no parameters, SQL will have embedded literal values

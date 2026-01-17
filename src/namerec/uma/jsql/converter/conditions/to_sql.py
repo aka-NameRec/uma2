@@ -111,10 +111,10 @@ def convert_in_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expression:
 
 
 def convert_string_operator(
-    op: str,
+    op: str,  # JSQLStringOperator would be more specific, but str is acceptable for flexibility
     cond_spec: dict[str, Any],
     left_expr: exp.Expression
-) -> exp.Expression:
+) -> exp.Like | exp.ILike | exp.SimilarTo | exp.RegexpLike | exp.Not:
     """
     Convert string matching operator (LIKE, ILIKE, SIMILAR_TO, REGEXP, RLIKE) to sqlglot expression.
     
@@ -280,80 +280,6 @@ def convert_logical_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expressi
     )
 
 
-def _jsql_query_to_sqlglot_select(query_spec: dict[str, Any]) -> exp.Select:
-    """
-    Convert JSQL query to sqlglot Select expression.
-    
-    Helper function for EXISTS and NOT EXISTS subqueries.
-    """
-    # Lazy import to avoid circular dependency
-    from namerec.uma.jsql.converter.jsql_to_sql import jsql_from_to_sqlglot
-    from namerec.uma.jsql.converter.jsql_to_sql import jsql_join_to_sqlglot
-    from namerec.uma.jsql.converter.jsql_to_sql import jsql_select_to_sqlglot
-    from namerec.uma.jsql.constants import JSQLField
-    from namerec.uma.jsql.constants import JoinType
-    from namerec.uma.jsql.constants import OrderDirection
-    
-    # Build SELECT expressions
-    select_exprs = jsql_select_to_sqlglot(query_spec.get('select', []))
-    
-    # Build FROM expression
-    from_expr = jsql_from_to_sqlglot(query_spec.get('from'))
-    
-    # Start building query
-    query = exp.Select(expressions=select_exprs)
-    query = query.from_(from_expr)
-    
-    # Add WHERE clause
-    if where_spec := query_spec.get('where'):
-        where_expr = jsql_condition_to_sqlglot(where_spec)
-        query = query.where(where_expr)
-    
-    # Add JOINs
-    if joins := query_spec.get('joins'):
-        for join_spec in joins:
-            join_expr = jsql_join_to_sqlglot(join_spec)
-            query = query.join(
-                join_expr['table'],
-                on=join_expr.get('on'),
-                join_type=join_expr.get('type', JoinType.INNER.value),
-            )
-    
-    # Add GROUP BY
-    if group_by := query_spec.get('group_by'):
-        for group_expr_spec in group_by:
-            group_expr = jsql_expression_to_sqlglot(group_expr_spec)
-            if group_expr:
-                query = query.group_by(group_expr)
-    
-    # Add HAVING
-    if having_spec := query_spec.get('having'):
-        having_expr = jsql_condition_to_sqlglot(having_spec)
-        query.args['having'] = exp.Having(this=having_expr)
-    
-    # Add ORDER BY
-    if order_by := query_spec.get('order_by'):
-        for order_spec in order_by:
-            if isinstance(order_spec, dict):
-                order_expr = jsql_expression_to_sqlglot(order_spec.get('field') or order_spec)
-                direction = order_spec.get('direction', OrderDirection.ASC.value).upper()
-            else:
-                order_expr = jsql_expression_to_sqlglot(order_spec)
-                direction = OrderDirection.ASC.value.upper()
-            
-            if order_expr:
-                desc = direction == OrderDirection.DESC.value.upper()
-                query = query.order_by(order_expr, desc=desc)
-    
-    # Add LIMIT
-    if limit := query_spec.get('limit'):
-        query.args['limit'] = exp.Limit(expression=exp.Literal.number(limit))
-    
-    # Add OFFSET
-    if offset := query_spec.get('offset'):
-        query.args['offset'] = exp.Offset(expression=exp.Literal.number(offset))
-    
-    return query
 
 
 def convert_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
@@ -361,7 +287,9 @@ def convert_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     if 'subquery' not in cond_spec:
         raise MissingFieldError('subquery', path='subquery', context='EXISTS operator')
     subquery_spec = cond_spec['subquery']
-    subquery = _jsql_query_to_sqlglot_select(subquery_spec)
+    # Import from jsql_to_sql to avoid circular dependency
+    from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot_select
+    subquery = jsql_query_to_sqlglot_select(subquery_spec)
     return exp.Exists(expression=subquery)
 
 
@@ -370,7 +298,9 @@ def convert_not_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     if 'subquery' not in cond_spec:
         raise MissingFieldError('subquery', path='subquery', context='NOT EXISTS operator')
     subquery_spec = cond_spec['subquery']
-    subquery = _jsql_query_to_sqlglot_select(subquery_spec)
+    # Import from jsql_to_sql to avoid circular dependency
+    from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot_select
+    subquery = jsql_query_to_sqlglot_select(subquery_spec)
     return exp.NotExists(expression=subquery)
 
 
@@ -479,92 +409,3 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
     raise UnknownOperatorError(operator=op, path='op', supported=supported)
 
 
-def _convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
-    """
-    Convert sqlglot Select expression to JSQL query dictionary.
-    
-    Helper function for EXISTS and NOT EXISTS subqueries.
-    """
-    # Lazy imports to avoid circular dependencies
-    from namerec.uma.jsql.converter.joins import convert_join_to_jsql
-    from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
-    from namerec.uma.jsql.converter.conditions.to_jsql import convert_condition_to_jsql
-    from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
-    from namerec.uma.jsql.constants import JSQLField
-    
-    jsql: dict[str, Any] = {}
-    
-    # FROM clause
-    if from_expr := select_expr.args.get('from_'):
-        if isinstance(from_expr, exp.From):
-            table = from_expr.this
-            if isinstance(table, exp.Table):
-                if table.alias:
-                    jsql['from'] = {
-                        'entity': table.name,
-                        'alias': table.alias,
-                    }
-                else:
-                    jsql['from'] = table.name
-    
-    # SELECT clause
-    if select_expr.expressions:
-        select_fields = []
-        for expr in select_expr.expressions:
-            field_dict = convert_expression_to_jsql(expr)
-            select_fields.append(field_dict)
-        if select_fields:
-            jsql['select'] = select_fields
-    
-    # WHERE clause
-    if select_expr.args.get('where'):
-        where_expr = select_expr.args['where'].this
-        where_jsql = convert_condition_to_jsql(where_expr)
-        jsql['where'] = where_jsql
-    
-    # JOIN clauses
-    if select_expr.args.get('joins'):
-        joins = []
-        for join in select_expr.args['joins']:
-            join_dict = convert_join_to_jsql(join)
-            joins.append(join_dict)
-        if joins:
-            jsql['joins'] = joins
-    
-    # ORDER BY clause
-    if select_expr.args.get('order'):
-        order_by = []
-        for order_expr in select_expr.args['order'].expressions:
-            order_dict = convert_order_to_jsql(order_expr)
-            order_by.append(order_dict)
-        if order_by:
-            jsql['order_by'] = order_by
-    
-    # LIMIT clause
-    if select_expr.args.get('limit'):
-        limit_expr = select_expr.args['limit'].expression
-        if isinstance(limit_expr, exp.Literal):
-            jsql['limit'] = int(limit_expr.this)
-    
-    # OFFSET clause
-    if select_expr.args.get('offset'):
-        offset_expr = select_expr.args['offset'].expression
-        if isinstance(offset_expr, exp.Literal):
-            jsql['offset'] = int(offset_expr.this)
-    
-    # GROUP BY clause
-    if select_expr.args.get('group'):
-        group_by = []
-        for group_expr in select_expr.args['group'].expressions:
-            field_dict = convert_expression_to_jsql(group_expr)
-            group_by.append(field_dict)
-        if group_by:
-            jsql['group_by'] = group_by
-    
-    # HAVING clause
-    if select_expr.args.get('having'):
-        having_expr = select_expr.args['having'].this
-        having_jsql = convert_condition_to_jsql(having_expr)
-        jsql['having'] = having_jsql
-    
-    return jsql

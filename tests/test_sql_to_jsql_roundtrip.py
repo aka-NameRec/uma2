@@ -148,6 +148,11 @@ def _normalize_condition(condition: dict[str, Any]) -> dict[str, Any]:
     if normalized.get('op') == '!=':
         normalized['op'] = '<>'
     
+    # Normalize RLIKE to REGEXP (they're semantically equivalent)
+    # RLIKE is MySQL alias for REGEXP, and SQLite converts RLIKE to REGEXP
+    if normalized.get('op') == 'RLIKE':
+        normalized['op'] = 'REGEXP'
+    
     op = normalized.get('op')
     
     # Handle IS NOT NULL -> NOT(IS NULL) normalization
@@ -373,13 +378,10 @@ def _compare_jsql_detailed(jsql1: dict[str, Any], jsql2: dict[str, Any]) -> str:
 
 
 # Known limitations:
-# - ILIKE/NOT ILIKE: SQLite doesn't support ILIKE, so SQLGlot converts to LOWER(...) LIKE LOWER(...)
-#   Roundtrip fails because we can't convert LOWER(...) LIKE LOWER(...) back to ILIKE
 # - RLIKE: SQLite converts RLIKE to REGEXP, so roundtrip changes RLIKE to REGEXP (semantically equivalent)
+#   This is acceptable as REGEXP and RLIKE are semantically equivalent operators
 KNOWN_LIMITATIONS = {
-    'pattern_matching_ilike',  # LOWER(...) LIKE LOWER(...) can't be converted back to ILIKE
-    'pattern_matching_not_ilike',  # NOT LOWER(...) LIKE LOWER(...) can't be converted back to NOT ILIKE
-    'pattern_matching_rlike',  # RLIKE gets converted to REGEXP in SQLite (acceptable difference)
+    'pattern_matching_rlike',  # RLIKE gets converted to REGEXP in SQLite (semantically equivalent, acceptable)
 }
 
 

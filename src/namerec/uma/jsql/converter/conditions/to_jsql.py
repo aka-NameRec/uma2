@@ -21,8 +21,21 @@ from namerec.uma.jsql.constants import JSQLOperator
 from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
 from namerec.uma.jsql.conversion_exceptions import UnknownOperatorError
 from namerec.uma.jsql.conversion_exceptions import UnsupportedOperationError
+from namerec.uma.jsql.converter.conditions.helpers import extract_in_operator_values
+from namerec.uma.jsql.converter.conditions.helpers import extract_lower_like_pattern
+from namerec.uma.jsql.converter.conditions.helpers import normalize_between_jsql_fields
+from namerec.uma.jsql.converter.conditions.helpers import validate_field_reference
+from namerec.uma.jsql.converter.conditions.helpers import validate_string_operator_operands
 from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
 from namerec.uma.jsql.converter.operators import SQLGLOT_TO_COMPARISON
+
+# Forward imports to avoid circular dependencies
+# These are used in convert_sqlglot_select_to_jsql and convert_condition_to_jsql
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from namerec.uma.jsql.converter.joins import convert_join_to_jsql
+    from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +74,9 @@ def convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
         ... #     "where": {"op": ">", "field": "age", "value": 18}
         ... # }
     """
+    # Lazy imports to avoid circular dependencies
+    # Note: These imports are deferred because joins.py and sql_to_jsql.py
+    # may import from this module, creating a circular dependency
     from namerec.uma.jsql.converter.joins import convert_join_to_jsql
     from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
     from namerec.uma.jsql.constants import JSQLField
@@ -199,25 +215,13 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
     if isinstance(expr, exp.ILike):
         left = convert_expression_to_jsql(expr.this)
         right = convert_expression_to_jsql(expr.expression)
-
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='ILIKE operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
-
-        if 'value' not in right:
-            raise InvalidExpressionError(
-                message='ILIKE operator right side must be a string literal',
-                path='right',
-                expression=right
-            )
-
+        
+        field, pattern = validate_string_operator_operands(left, right, 'ILIKE')
+        
         return {
-            'field': left['field'],
+            'field': field,
             'op': JSQLOperator.ILIKE.value,
-            'pattern': right['value'],
+            'pattern': pattern,
         }
 
     # Note: NOT ILIKE is handled below as exp.Not(exp.ILike(...))
@@ -226,50 +230,26 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
     if isinstance(expr, exp.SimilarTo):
         left = convert_expression_to_jsql(expr.this)
         right = convert_expression_to_jsql(expr.expression)
-
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='SIMILAR TO operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
-
-        if 'value' not in right:
-            raise InvalidExpressionError(
-                message='SIMILAR TO operator right side must be a string literal',
-                path='right',
-                expression=right
-            )
-
+        
+        field, pattern = validate_string_operator_operands(left, right, 'SIMILAR TO')
+        
         return {
-            'field': left['field'],
+            'field': field,
             'op': JSQLOperator.SIMILAR_TO.value,
-            'pattern': right['value'],
+            'pattern': pattern,
         }
 
     if isinstance(expr, exp.RegexpLike):
         left = convert_expression_to_jsql(expr.this)
         right = convert_expression_to_jsql(expr.expression)
-
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='REGEXP/RLIKE operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
-
-        if 'value' not in right:
-            raise InvalidExpressionError(
-                message='REGEXP/RLIKE operator right side must be a string literal',
-                path='right',
-                expression=right
-            )
-
+        
+        field, pattern = validate_string_operator_operands(left, right, 'REGEXP/RLIKE')
+        
         # Use REGEXP as default (RLIKE is MySQL alias)
         return {
-            'field': left['field'],
+            'field': field,
             'op': JSQLOperator.REGEXP.value,
-            'pattern': right['value'],
+            'pattern': pattern,
         }
 
     # Note: NOT BETWEEN is handled below as exp.Not(exp.Between(...))
@@ -291,54 +271,44 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
         # Handle NOT(IN(...)) pattern - convert to NOT IN
         if isinstance(inner, exp.In):
             left = convert_expression_to_jsql(inner.this)
-            if 'field' not in left:
-                raise InvalidExpressionError(
-                    message='NOT IN operator left side must be a field reference',
-                    path='left',
-                    expression=left
-                )
+            field = validate_field_reference(left, 'NOT IN', 'left')
             
-            values = []
-            if isinstance(inner.expressions, list):
-                for val_expr in inner.expressions:
-                    val = convert_expression_to_jsql(val_expr)
-                    if 'value' not in val:
-                        raise InvalidExpressionError(
-                            message='NOT IN operator values must be literals',
-                            path='values',
-                            expression=val
-                        )
-                    values.append(val['value'])
+            values = extract_in_operator_values(inner.expressions, 'NOT IN')
             
             return {
-                'field': left['field'],
+                'field': field,
                 'op': JSQLOperator.NOT_IN.value,
                 'values': values,
             }
         
-        # Handle NOT(LIKE(...)) pattern - convert to NOT LIKE
+        # Handle NOT(LIKE(...)) pattern - convert to NOT LIKE or NOT ILIKE
         if isinstance(inner, exp.Like):
+            # Check for NOT LOWER(...) LIKE LOWER(...) pattern (SQLite converts NOT ILIKE to this)
+            lower_result = extract_lower_like_pattern(inner)
+            
+            if lower_result:
+                left, right = lower_result
+                field, pattern = validate_string_operator_operands(
+                    left, right, 'NOT ILIKE', 'LOWER pattern'
+                )
+                
+                # Convert NOT LOWER(...) LIKE LOWER(...) back to NOT ILIKE
+                return {
+                    'field': field,
+                    'op': JSQLOperator.NOT_ILIKE.value,
+                    'pattern': pattern,
+                }
+            
+            # Regular NOT LIKE (not LOWER pattern)
             left = convert_expression_to_jsql(inner.this)
             right = convert_expression_to_jsql(inner.expression)
             
-            if 'field' not in left:
-                raise InvalidExpressionError(
-                    message='NOT LIKE operator left side must be a field reference',
-                    path='left',
-                    expression=left
-                )
-            
-            if 'value' not in right:
-                raise InvalidExpressionError(
-                    message='NOT LIKE operator right side must be a string literal',
-                    path='right',
-                    expression=right
-                )
+            field, pattern = validate_string_operator_operands(left, right, 'NOT LIKE')
             
             return {
-                'field': left['field'],
+                'field': field,
                 'op': JSQLOperator.NOT_LIKE.value,
-                'pattern': right['value'],
+                'pattern': pattern,
             }
         
         # Handle NOT(ILIKE(...)) pattern - convert to NOT ILIKE
@@ -346,24 +316,12 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
             left = convert_expression_to_jsql(inner.this)
             right = convert_expression_to_jsql(inner.expression)
             
-            if 'field' not in left:
-                raise InvalidExpressionError(
-                    message='NOT ILIKE operator left side must be a field reference',
-                    path='left',
-                    expression=left
-                )
-            
-            if 'value' not in right:
-                raise InvalidExpressionError(
-                    message='NOT ILIKE operator right side must be a string literal',
-                    path='right',
-                    expression=right
-                )
+            field, pattern = validate_string_operator_operands(left, right, 'NOT ILIKE')
             
             return {
-                'field': left['field'],
+                'field': field,
                 'op': JSQLOperator.NOT_ILIKE.value,
-                'pattern': right['value'],
+                'pattern': pattern,
             }
         
         # Handle NOT(BETWEEN(...)) pattern - convert to NOT BETWEEN
@@ -371,33 +329,9 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
             expr_jsql = convert_expression_to_jsql(inner.this)
             low_jsql = convert_expression_to_jsql(inner.args.get('low'))
             high_jsql = convert_expression_to_jsql(inner.args.get('high'))
-        
-            result = {
-                'op': JSQLOperator.NOT_BETWEEN.value,
-            }
-
-            # Use 'expr' field (can be field or expression)
-            if 'field' in expr_jsql:
-                result['expr'] = {'field': expr_jsql['field']}
-            elif 'value' in expr_jsql:
-                result['expr'] = {'value': expr_jsql['value']}
-            else:
-                result['expr'] = expr_jsql
             
-            if 'value' in low_jsql:
-                result['low'] = {'value': low_jsql['value']}
-            elif 'field' in low_jsql:
-                result['low'] = {'field': low_jsql['field']}
-            else:
-                result['low'] = low_jsql
-            
-            if 'value' in high_jsql:
-                result['high'] = {'value': high_jsql['value']}
-            elif 'field' in high_jsql:
-                result['high'] = {'field': high_jsql['field']}
-            else:
-                result['high'] = high_jsql
-            
+            result = normalize_between_jsql_fields(expr_jsql, low_jsql, high_jsql)
+            result['op'] = JSQLOperator.NOT_BETWEEN.value
             return result
         
         # Handle NOT(EXISTS(...)) pattern - convert to NOT EXISTS
@@ -432,15 +366,10 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
         left = convert_expression_to_jsql(expr.left)
         right = convert_expression_to_jsql(expr.right)
 
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='Comparison operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
+        field = validate_field_reference(left, 'Comparison operator', 'left')
 
         result: dict[str, Any] = {
-            'field': left['field'],
+            'field': field,
             'op': op,
         }
 
@@ -463,12 +392,7 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
     # Handle IN
     if isinstance(expr, exp.In):
         left = convert_expression_to_jsql(expr.this)
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='IN operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
+        field = validate_field_reference(left, 'IN', 'left')
 
         # Check if IN has a subquery (stored in args['query'])
         if expr.args.get('query'):
@@ -484,7 +408,7 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
                 if isinstance(select_expr, exp.Select):
                     subquery_jsql = convert_sqlglot_select_to_jsql(select_expr)
                     return {
-                        'field': left['field'],
+                        'field': field,
                         'op': JSQLOperator.IN.value,
                         'right': subquery_jsql,
                     }
@@ -497,26 +421,16 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
                 from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
                 subquery_jsql = convert_sqlglot_select_to_jsql(first_expr.this)
                 return {
-                    'field': left['field'],
+                    'field': field,
                     'op': JSQLOperator.IN.value,
                     'right': subquery_jsql,
                 }
 
         # IN with value list
-        values = []
-        if isinstance(expr.expressions, list):
-            for val_expr in expr.expressions:
-                val = convert_expression_to_jsql(val_expr)
-                if 'value' not in val:
-                    raise InvalidExpressionError(
-                        message='IN operator values must be literals',
-                        path='values',
-                        expression=val
-                    )
-                values.append(val['value'])
+        values = extract_in_operator_values(expr.expressions, 'IN')
 
         return {
-            'field': left['field'],
+            'field': field,
             'op': JSQLOperator.IN.value,
             'values': values,
         }
@@ -526,73 +440,50 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
         expr_jsql = convert_expression_to_jsql(expr.this)
         low_jsql = convert_expression_to_jsql(expr.args.get('low'))
         high_jsql = convert_expression_to_jsql(expr.args.get('high'))
-
-        result = {
-            'op': JSQLOperator.BETWEEN.value,
-        }
-
-        # Use 'expr' field (can be field or expression)
-        if 'field' in expr_jsql:
-            result['expr'] = {'field': expr_jsql['field']}
-        elif 'value' in expr_jsql:
-            result['expr'] = {'value': expr_jsql['value']}
-        else:
-            result['expr'] = expr_jsql
-
-        if 'value' in low_jsql:
-            result['low'] = {'value': low_jsql['value']}
-        elif 'field' in low_jsql:
-            result['low'] = {'field': low_jsql['field']}
-        else:
-            result['low'] = low_jsql
-
-        if 'value' in high_jsql:
-            result['high'] = {'value': high_jsql['value']}
-        elif 'field' in high_jsql:
-            result['high'] = {'field': high_jsql['field']}
-        else:
-            result['high'] = high_jsql
-
+        
+        result = normalize_between_jsql_fields(expr_jsql, low_jsql, high_jsql)
+        result['op'] = JSQLOperator.BETWEEN.value
         return result
 
     # Handle LIKE
     if isinstance(expr, exp.Like):
+        # Check for LOWER(...) LIKE LOWER(...) pattern (SQLite converts ILIKE to this)
+        # This pattern should be converted back to ILIKE
+        lower_result = extract_lower_like_pattern(expr)
+        
+        if lower_result:
+            left, right = lower_result
+            field, pattern = validate_string_operator_operands(
+                left, right, 'ILIKE', 'LOWER pattern'
+            )
+            
+            # Convert LOWER(...) LIKE LOWER(...) back to ILIKE
+            return {
+                'field': field,
+                'op': JSQLOperator.ILIKE.value,
+                'pattern': pattern,
+            }
+        
+        # Regular LIKE (not LOWER pattern)
         left = convert_expression_to_jsql(expr.this)
         right = convert_expression_to_jsql(expr.expression)
-
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='LIKE operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
-
-        if 'value' not in right:
-            raise InvalidExpressionError(
-                message='LIKE operator right side must be a string literal',
-                path='right',
-                expression=right
-            )
-
+        
+        field, pattern = validate_string_operator_operands(left, right, 'LIKE')
+        
         return {
-            'field': left['field'],
+            'field': field,
             'op': JSQLOperator.LIKE.value,
-            'pattern': right['value'],
+            'pattern': pattern,
         }
 
     # Handle IS NULL / IS NOT NULL
     if isinstance(expr, exp.Is):
         left = convert_expression_to_jsql(expr.this)
-        if 'field' not in left:
-            raise InvalidExpressionError(
-                message='IS NULL operator left side must be a field reference',
-                path='left',
-                expression=left
-            )
+        field = validate_field_reference(left, 'IS NULL', 'left')
 
         if isinstance(expr.expression, exp.Null):
             return {
-                'field': left['field'],
+                'field': field,
                 'op': JSQLOperator.IS_NULL.value,
             }
 

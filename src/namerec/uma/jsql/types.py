@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 from typing import Any
+from typing import Literal
+from typing import TypedDict
 
 
 @dataclass(slots=True)
@@ -66,3 +68,40 @@ class QueryResult:
 JSQLQuery = dict[str, Any]
 JSQLExpression = dict[str, Any]
 JSQLCondition = dict[str, Any]
+
+# String operator types
+JSQLStringOperator = Literal[
+    'LIKE', 'NOT LIKE', 'ILIKE', 'NOT ILIKE',
+    'SIMILAR TO', 'REGEXP', 'RLIKE'
+]
+
+# Comparison operator types
+JSQLComparisonOperator = Literal[
+    '=', '!=', '<>', '<', '<=', '>', '>='
+]
+
+# Logical operator types
+JSQLLogicalOperator = Literal['AND', 'OR', 'NOT']
+
+# Special operator types
+JSQLSpecialOperator = Literal[
+    'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN',
+    'IS NULL', 'IS NOT NULL', 'EXISTS', 'NOT EXISTS'
+]
+
+
+class JSQLFieldRef(TypedDict, total=False):
+    """JSQL field reference specification."""
+    field: str
+
+
+class JSQLValueRef(TypedDict, total=False):
+    """JSQL value literal specification."""
+    value: Any
+
+
+class JSQLBetweenFields(TypedDict, total=False):
+    """Normalized BETWEEN fields structure."""
+    expr: dict[str, Any]  # Can be field or value reference
+    low: dict[str, Any]   # Can be field or value reference
+    high: dict[str, Any]  # Can be field or value reference

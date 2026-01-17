@@ -19,8 +19,13 @@ Example:
     >>> # expr is now a SQLGlot expression representing "age >= 18"
 """
 
+from namerec.uma.jsql.converter.conditions.helpers import extract_in_operator_values
 from namerec.uma.jsql.converter.conditions.helpers import extract_left_expression
+from namerec.uma.jsql.converter.conditions.helpers import extract_lower_like_pattern
 from namerec.uma.jsql.converter.conditions.helpers import extract_pattern
+from namerec.uma.jsql.converter.conditions.helpers import normalize_between_jsql_fields
+from namerec.uma.jsql.converter.conditions.helpers import validate_field_reference
+from namerec.uma.jsql.converter.conditions.helpers import validate_string_operator_operands
 from namerec.uma.jsql.converter.conditions.to_jsql import convert_condition_to_jsql
 from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
 from namerec.uma.jsql.converter.conditions.to_sql import jsql_condition_to_sqlglot
@@ -29,6 +34,11 @@ __all__ = [
     'jsql_condition_to_sqlglot',
     'convert_condition_to_jsql',
     'convert_sqlglot_select_to_jsql',
+    'extract_in_operator_values',
     'extract_left_expression',
+    'extract_lower_like_pattern',
     'extract_pattern',
+    'normalize_between_jsql_fields',
+    'validate_field_reference',
+    'validate_string_operator_operands',
 ]
