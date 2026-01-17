@@ -17,6 +17,7 @@ ARITHMETIC_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
 COMPARISON_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
     JSQLOperator.EQ.value: exp.EQ,
     JSQLOperator.NE.value: exp.NEQ,
+    JSQLOperator.NEQ_ISO.value: exp.NEQ,  # Maps to same as !=
     JSQLOperator.GT.value: exp.GT,
     JSQLOperator.GE.value: exp.GTE,
     JSQLOperator.LT.value: exp.LT,

@@ -63,11 +63,17 @@ class JSQLParser:
             JSQLOperator.OR: self._handle_or,
             JSQLOperator.NOT: self._handle_not,
             JSQLOperator.IN: self._handle_in,
+            JSQLOperator.NOT_IN: self._handle_not_in,
             JSQLOperator.BETWEEN: self._handle_between,
+            JSQLOperator.NOT_BETWEEN: self._handle_not_between,
             JSQLOperator.EXISTS: self._handle_exists,
+            JSQLOperator.NOT_EXISTS: self._handle_not_exists,
             JSQLOperator.IS_NULL: self._handle_is_null,
             JSQLOperator.IS_NOT_NULL: self._handle_is_not_null,
             JSQLOperator.LIKE: self._handle_like,
+            JSQLOperator.NOT_LIKE: self._handle_not_like,
+            JSQLOperator.ILIKE: self._handle_ilike,
+            JSQLOperator.NOT_ILIKE: self._handle_not_ilike,
         }
 
     async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig, dict[str, str]]:
@@ -605,7 +611,7 @@ class JSQLParser:
         match op:
             case JSQLOperator.EQ:
                 return left == right
-            case JSQLOperator.NE:
+            case JSQLOperator.NE | JSQLOperator.NEQ_ISO:
                 return left != right
             case JSQLOperator.LT:
                 return left < right
@@ -641,12 +647,42 @@ class JSQLParser:
         right = await self._build_expression(right_spec)
         return left.in_(right)
 
+    async def _handle_not_in(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle NOT IN operator."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_IN.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_IN.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        right_spec = condition_spec[JSQLField.RIGHT.value]
+
+        # Subquery
+        if isinstance(right_spec, dict) and JSQLField.SUBQUERY.value in right_spec:
+            subquery = await self._build_query(right_spec[JSQLField.SUBQUERY.value])
+            return ~left.in_(subquery)
+
+        # List of values
+        if isinstance(right_spec, list):
+            return ~left.in_(right_spec)
+
+        # Expression
+        right = await self._build_expression(right_spec)
+        return ~left.in_(right)
+
     async def _handle_exists(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle EXISTS operator."""
         if JSQLField.SUBQUERY.value not in condition_spec:
             raise JSQLSyntaxError(f'{JSQLOperator.EXISTS.value} must have "{JSQLField.SUBQUERY.value}" field')
         subquery = await self._build_query(condition_spec[JSQLField.SUBQUERY.value])
         return exists(subquery)
+
+    async def _handle_not_exists(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle NOT EXISTS operator."""
+        if JSQLField.SUBQUERY.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_EXISTS.value} must have "{JSQLField.SUBQUERY.value}" field')
+        subquery = await self._build_query(condition_spec[JSQLField.SUBQUERY.value])
+        return ~exists(subquery)
 
     async def _handle_is_null(self, condition_spec: JSQLExpression) -> ClauseElement:
         """Handle IS NULL operator."""
@@ -675,6 +711,43 @@ class JSQLParser:
         right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
         return left.like(right)
 
+    async def _handle_not_like(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle NOT LIKE operator."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_LIKE.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_LIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        return ~left.like(right)
+
+    async def _handle_ilike(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle ILIKE operator."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.ILIKE.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.ILIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        # Extract type from left expression to use for right expression
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        return left.ilike(right)
+
+    async def _handle_not_ilike(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle NOT ILIKE operator."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_ILIKE.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_ILIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        return ~left.ilike(right)
+
     async def _handle_between(self, condition_spec: JSQLExpression) -> ClauseElement:
         """
         Handle BETWEEN operator.
@@ -696,6 +769,28 @@ class JSQLParser:
         high = await self._build_expression(condition_spec['high'], expected_type=expr_type)
         
         return expr.between(low, high)
+
+    async def _handle_not_between(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """
+        Handle NOT BETWEEN operator.
+        
+        JSQL format: {"op": "NOT BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
+        SQL equivalent: expr NOT BETWEEN low AND high
+        """
+        if JSQLField.EXPR.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_BETWEEN.value} must have "{JSQLField.EXPR.value}" field')
+        if 'low' not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_BETWEEN.value} must have "low" field')
+        if 'high' not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.NOT_BETWEEN.value} must have "high" field')
+
+        expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
+        # Extract type from expression to use for low/high bounds
+        expr_type = getattr(expr, 'type', None) if hasattr(expr, 'type') else None
+        low = await self._build_expression(condition_spec['low'], expected_type=expr_type)
+        high = await self._build_expression(condition_spec['high'], expected_type=expr_type)
+        
+        return ~expr.between(low, high)
 
     async def _build_condition(self, condition_spec: JSQLExpression) -> ClauseElement:
         """

@@ -66,6 +66,7 @@ class JSQLOperator(str, Enum):
     # Comparison operators
     EQ = '='
     NE = '!='
+    NEQ_ISO = '<>'  # ISO standard not-equal operator
     LT = '<'
     LE = '<='
     GT = '>'
@@ -73,11 +74,17 @@ class JSQLOperator(str, Enum):
 
     # Special operators
     IN = 'IN'
+    NOT_IN = 'NOT IN'
     BETWEEN = 'BETWEEN'
+    NOT_BETWEEN = 'NOT BETWEEN'
     EXISTS = 'EXISTS'
+    NOT_EXISTS = 'NOT EXISTS'
     IS_NULL = 'IS NULL'
     IS_NOT_NULL = 'IS NOT NULL'
     LIKE = 'LIKE'
+    NOT_LIKE = 'NOT LIKE'
+    ILIKE = 'ILIKE'
+    NOT_ILIKE = 'NOT ILIKE'
 
     # Arithmetic operators
     ADD = '+'
@@ -109,6 +116,7 @@ LOGICAL_OPERATORS = frozenset({JSQLOperator.AND, JSQLOperator.OR, JSQLOperator.N
 COMPARISON_OPERATORS = frozenset({
     JSQLOperator.EQ,
     JSQLOperator.NE,
+    JSQLOperator.NEQ_ISO,
     JSQLOperator.LT,
     JSQLOperator.LE,
     JSQLOperator.GT,
