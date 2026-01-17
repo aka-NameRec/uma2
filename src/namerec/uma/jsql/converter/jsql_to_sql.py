@@ -11,7 +11,7 @@ from namerec.uma.jsql.constants import JoinType
 from namerec.uma.jsql.constants import OrderDirection
 from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
 from namerec.uma.jsql.conversion_exceptions import MissingFieldError
-from namerec.uma.jsql.converter.conditions import jsql_condition_to_sqlglot
+from namerec.uma.jsql.converter.conditions.to_sql import jsql_condition_to_sqlglot
 from namerec.uma.jsql.converter.expressions import jsql_expression_to_sqlglot
 from namerec.uma.jsql.converter.joins import jsql_join_to_sqlglot
 from namerec.uma.jsql.exceptions import JSQLSyntaxError

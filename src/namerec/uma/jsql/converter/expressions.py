@@ -185,8 +185,8 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
 
     # Handle subqueries
     if isinstance(expr, exp.Subquery):
-        from namerec.uma.jsql.converter.conditions import _convert_sqlglot_select_to_jsql
-        subquery_jsql = _convert_sqlglot_select_to_jsql(expr.this)
+        from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
+        subquery_jsql = convert_sqlglot_select_to_jsql(expr.this)
         return subquery_jsql
 
     # Handle window functions (functions with OVER clause)

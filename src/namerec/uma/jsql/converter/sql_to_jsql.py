@@ -8,7 +8,7 @@ import sqlglot.expressions as exp
 
 from namerec.uma.jsql.constants import OrderDirection
 from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
-from namerec.uma.jsql.converter.conditions import convert_condition_to_jsql
+from namerec.uma.jsql.converter.conditions.to_jsql import convert_condition_to_jsql
 from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
 from namerec.uma.jsql.converter.joins import convert_join_to_jsql
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
@@ -70,12 +70,12 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
 
         # WITH clause (CTEs) - sqlglot uses 'with_' key
         if parsed.args.get('with_'):
-            from namerec.uma.jsql.converter.conditions import _convert_sqlglot_select_to_jsql
+            from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
             ctes = []
             for cte in parsed.args['with_'].expressions:
                 if isinstance(cte, exp.CTE):
                     cte_name = cte.alias
-                    cte_query = _convert_sqlglot_select_to_jsql(cte.this)
+                    cte_query = convert_sqlglot_select_to_jsql(cte.this)
                     ctes.append({
                         'name': cte_name,
                         'query': cte_query,

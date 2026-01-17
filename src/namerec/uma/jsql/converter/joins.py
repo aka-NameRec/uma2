@@ -8,8 +8,8 @@ import sqlglot.expressions as exp
 from namerec.uma.jsql.constants import JoinType
 from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
 from namerec.uma.jsql.conversion_exceptions import MissingFieldError
-from namerec.uma.jsql.converter.conditions import convert_condition_to_jsql
-from namerec.uma.jsql.converter.conditions import jsql_condition_to_sqlglot
+from namerec.uma.jsql.converter.conditions.to_jsql import convert_condition_to_jsql
+from namerec.uma.jsql.converter.conditions.to_sql import jsql_condition_to_sqlglot
 from namerec.uma.jsql.converter.operators import SQLGLOT_JOIN_SIDE_TO_TYPE
 
 logger = logging.getLogger(__name__)
