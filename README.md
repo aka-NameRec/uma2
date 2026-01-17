@@ -135,7 +135,11 @@ async def main():
     jsql = {
         "from": "users",
         "select": [{"field": "id"}, {"field": "name"}],
-        "where": {"field": "active", "op": "=", "value": True},
+        "where": {
+            "op": "=",
+            "left": {"field": "active"},
+            "right": {"value": True}
+        },
         "limit": 10
     }
     

@@ -107,7 +107,14 @@ Expressions support operators and functions:
 
 **Equivalent SQL**: `base_price + (base_price * 0.2)`
 
-**Supported operators**: `=`, `!=`, `<`, `<=`, `>`, `>=`, `+`, `-`, `*`, `/`, `%`, `AND`, `OR`, `NOT`, `IN`, `BETWEEN`, `LIKE`, `IS NULL`, `IS NOT NULL`
+**Supported operators**:
+- **Comparison**: `=`, `!=`, `<>` (ISO standard not-equal, same as `!=`), `<`, `<=`, `>`, `>=`
+- **Logical**: `AND`, `OR`, `NOT`
+- **Arithmetic**: `+`, `-`, `*`, `/`, `%`, `||` (string concatenation)
+- **Membership**: `IN`, `NOT IN`, `EXISTS`, `NOT EXISTS`
+- **Range**: `BETWEEN`, `NOT BETWEEN`
+- **Pattern matching**: `LIKE`, `NOT LIKE`, `ILIKE` (case-insensitive LIKE), `NOT ILIKE`, `SIMILAR TO` (PostgreSQL regex), `REGEXP` (MySQL/PostgreSQL regex), `RLIKE` (MySQL alias for REGEXP)
+- **Null checks**: `IS NULL`, `IS NOT NULL`
 
 ### Functions
 
@@ -392,6 +399,172 @@ WHERE order_date BETWEEN '2025-12-18' AND '2025-12-31'
 ```
 
 The parser automatically handles type inference from the `expr` field, ensuring proper type casting for timestamp and other data types.
+
+### NOT IN, NOT LIKE, NOT BETWEEN, NOT EXISTS
+
+For convenience and readability, JSQL supports explicit NOT operators that are clearer than wrapping in `NOT`:
+
+**NOT IN**:
+```json
+{
+  "from": "products",
+  "select": ["id", "name"],
+  "where": {
+    "op": "NOT IN",
+    "left": {"field": "category_id"},
+    "right": {"values": [1, 2, 3]}
+  }
+}
+```
+
+**NOT LIKE**:
+```json
+{
+  "from": "users",
+  "select": ["id", "email"],
+  "where": {
+    "op": "NOT LIKE",
+    "left": {"field": "email"},
+    "right": {"value": "%@example.com"}
+  }
+}
+```
+
+**NOT BETWEEN**:
+```json
+{
+  "from": "orders",
+  "select": ["id", "total"],
+  "where": {
+    "op": "NOT BETWEEN",
+    "expr": {"field": "total"},
+    "low": {"value": 100},
+    "high": {"value": 1000}
+  }
+}
+```
+
+**NOT EXISTS**:
+```json
+{
+  "from": "customers",
+  "select": ["id", "name"],
+  "where": {
+    "op": "NOT EXISTS",
+    "subquery": {
+      "from": "orders",
+      "select": [{"value": 1}],
+      "where": {
+        "op": "=",
+        "left": {"field": "orders.customer_id"},
+        "right": {"field": "customers.id"}
+      }
+    }
+  }
+}
+```
+
+### ILIKE (Case-Insensitive LIKE)
+
+The `ILIKE` operator is similar to `LIKE` but performs case-insensitive pattern matching (PostgreSQL-specific, but SQLAlchemy can convert to `LOWER()` for other databases):
+
+```json
+{
+  "from": "users",
+  "select": ["id", "name", "email"],
+  "where": {
+    "op": "ILIKE",
+    "left": {"field": "name"},
+    "right": {"value": "%john%"}
+  }
+}
+```
+
+**Equivalent SQL** (PostgreSQL):
+```sql
+SELECT id, name, email
+FROM users
+WHERE name ILIKE '%john%'
+```
+
+**Note**: On non-PostgreSQL databases, SQLAlchemy may convert this to `LOWER(name) LIKE LOWER('%john%')` for compatibility.
+
+**NOT ILIKE** is also supported for case-insensitive pattern exclusion:
+```json
+{
+  "op": "NOT ILIKE",
+  "left": {"field": "name"},
+  "right": {"value": "%admin%"}
+}
+```
+
+### SIMILAR TO, REGEXP, RLIKE (Regular Expression Pattern Matching)
+
+JSQL supports regular expression pattern matching operators:
+
+**SIMILAR TO** (PostgreSQL regex patterns):
+```json
+{
+  "from": "users",
+  "select": ["id", "email"],
+  "where": {
+    "op": "SIMILAR TO",
+    "left": {"field": "email"},
+    "right": {"value": "%@(gmail|yahoo)\\.com"}
+  }
+}
+```
+
+**REGEXP** / **RLIKE** (MySQL/PostgreSQL regex):
+```json
+{
+  "from": "users",
+  "select": ["id", "phone"],
+  "where": {
+    "op": "REGEXP",
+    "left": {"field": "phone"},
+    "right": {"value": "^\\+[1-9]\\d{1,14}$"}
+  }
+}
+```
+
+**Note**: 
+- `SIMILAR TO` uses PostgreSQL's SQL-standard regex syntax
+- `REGEXP` and `RLIKE` use the database's native regex engine (MySQL uses POSIX regex, PostgreSQL uses PCRE)
+- These operators are database-specific and may not work on all databases
+
+### String Concatenation (||)
+
+The `||` operator concatenates strings. It works differently across databases (PostgreSQL uses `||`, MySQL uses `CONCAT()`, SQL Server uses `+`), but UMA/SQLAlchemy handles the conversion automatically:
+
+```json
+{
+  "from": "users",
+  "select": [
+    {"field": "id"},
+    {
+      "expr": {
+        "op": "||",
+        "left": {"field": "first_name"},
+        "right": {
+          "op": "||",
+          "left": {"value": " "},
+          "right": {"field": "last_name"}
+        }
+      },
+      "alias": "full_name"
+    }
+  ]
+}
+```
+
+**Equivalent SQL** (PostgreSQL):
+```sql
+SELECT id, first_name || ' ' || last_name AS full_name
+FROM users
+```
+
+**Note**: For better cross-database compatibility, you can also use the `CONCAT()` function instead of `||`.
 
 ### Grouping and Having
 
