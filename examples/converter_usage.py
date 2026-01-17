@@ -54,7 +54,7 @@ async def example_debug_mode() -> None:
     jsql = {
         'from': 'users',
         'select': [{'field': 'id'}, {'field': 'name'}, {'field': 'email'}],
-        'where': {'field': 'active', 'op': '=', 'value': 1},
+        'where': {'op': '=', 'left': {'field': 'active'}, 'right': {'value': 1}},
         'order_by': [{'field': 'name', 'direction': 'ASC'}],
         'debug': True,  # Enable debug mode
     }
@@ -78,7 +78,7 @@ def example_jsql_to_sql() -> None:
     jsql = {
         'from': 'users',
         'select': [{'field': 'id'}, {'field': 'name'}],
-        'where': {'field': 'active', 'op': '=', 'value': True},
+        'where': {'op': '=', 'left': {'field': 'active'}, 'right': {'value': True}},
         'limit': 10,
     }
 
@@ -105,13 +105,13 @@ def example_jsql_to_sql_with_join() -> None:
                 'type': 'INNER',
                 'entity': 'customers',
                 'on': {
-                    'field': 'orders.customer_id',
                     'op': '=',
-                    'right_field': 'customers.id',
+                    'left': {'field': 'orders.customer_id'},
+                    'right': {'field': 'customers.id'},
                 },
             },
         ],
-        'where': {'field': 'orders.total', 'op': '>', 'value': 100},
+        'where': {'op': '>', 'left': {'field': 'orders.total'}, 'right': {'value': 100}},
         'order_by': [{'field': 'orders.total', 'direction': 'DESC'}],
     }
 
@@ -201,8 +201,8 @@ def example_round_trip() -> None:
         'where': {
             'op': 'AND',
             'conditions': [
-                {'field': 'price', 'op': '>', 'value': 10},
-                {'field': 'active', 'op': '=', 'value': 1},
+                {'op': '>', 'left': {'field': 'price'}, 'right': {'value': 10}},
+                {'op': '=', 'left': {'field': 'active'}, 'right': {'value': 1}},
             ],
         },
         'order_by': [{'field': 'price', 'direction': 'DESC'}],

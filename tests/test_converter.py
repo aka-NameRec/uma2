@@ -30,9 +30,9 @@ class TestJSQLToSQL:
             'from': 'users',
             'select': [{'field': 'id'}],
             'where': {
-                'field': 'active',
                 'op': '=',
-                'value': True,
+                'left': {'field': 'active'},
+                'right': {'value': True},
             },
         }
 
@@ -51,9 +51,9 @@ class TestJSQLToSQL:
                     'type': 'LEFT',
                     'entity': 'orders',
                     'on': {
-                        'field': 'users.id',
                         'op': '=',
-                        'right_field': 'orders.user_id',
+                        'left': {'field': 'users.id'},
+                        'right': {'field': 'orders.user_id'},
                     },
                 },
             ],
@@ -138,8 +138,10 @@ class TestSQLToJSQL:
 
         assert jsql['from'] == 'users'
         assert 'where' in jsql
-        assert jsql['where']['field'] == 'active'
+        # Use left/right format (no longer using field/value format)
         assert jsql['where']['op'] == '='
+        assert jsql['where']['left']['field'] == 'active'
+        assert jsql['where']['right']['value'] == 1
 
     def test_select_with_limit(self) -> None:
         """Test SELECT with LIMIT."""
@@ -203,9 +205,9 @@ class TestRoundTrip:
             'from': 'users',
             'select': [{'field': 'id'}, {'field': 'name'}],
             'where': {
-                'field': 'active',
                 'op': '=',
-                'value': 1,
+                'left': {'field': 'active'},
+                'right': {'value': 1},
             },
             'limit': 10,
         }

@@ -41,7 +41,7 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         {
             'from': 'users',
             'select': [{'field': 'id'}, {'field': 'name'}],
-            'where': {'field': 'active', 'op': '=', 'value': 1},
+            'where': {'op': '=', 'left': {'field': 'active'}, 'right': {'value': 1}},
             'order_by': [{'field': 'name', 'direction': 'ASC'}],
             'limit': 10
         }

@@ -96,7 +96,7 @@ Execute JSQL query:
   "jsql": {
     "from": "users",
     "select": [{"field": "id"}, {"field": "name"}],
-    "where": {"field": "active", "op": "=", "value": true},
+    "where": {"op": "=", "left": {"field": "active"}, "right": {"value": true}},
     "limit": 10
   },
   "params": {}
@@ -187,7 +187,7 @@ Convert JSQL to SQL:
   "data": {
     "from": "users",
     "select": [{"field": "id"}, {"field": "name"}],
-    "where": {"field": "active", "op": "=", "value": true},
+    "where": {"op": "=", "left": {"field": "active"}, "right": {"value": true}},
     "limit": 10
   },
   "dialect": "postgresql"

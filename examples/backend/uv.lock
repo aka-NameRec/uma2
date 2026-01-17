@@ -263,7 +263,7 @@ wheels = [
 
 [[package]]
 name = "namerec-uma"
-version = "0.4"
+version = "0.6"
 source = { editable = "../../" }
 dependencies = [
     { name = "sqlalchemy" },

@@ -80,13 +80,7 @@ def _normalize_jsql(jsql: dict[str, Any]) -> dict[str, Any]:
     # WHERE clause - normalize operators
     if 'where' in jsql:
         where_normalized = _normalize_condition(jsql['where'])
-        # Normalize pattern/value in LIKE/NOT LIKE operators for comparison
-        # Normalize pattern field to value field for string operators
-        if isinstance(where_normalized, dict):
-            string_ops = ('LIKE', 'NOT LIKE', 'ILIKE', 'NOT ILIKE', 'SIMILAR TO', 'REGEXP', 'RLIKE')
-            if where_normalized.get('op') in string_ops:
-                if 'pattern' in where_normalized and 'value' not in where_normalized:
-                    where_normalized['value'] = where_normalized.pop('pattern')
+        # String operators now use left/right format (no longer using pattern field)
         normalized['where'] = where_normalized
     
     # HAVING clause - normalize operators
@@ -157,13 +151,26 @@ def _normalize_condition(condition: dict[str, Any]) -> dict[str, Any]:
     
     # Handle IS NOT NULL -> NOT(IS NULL) normalization
     if op == 'IS NOT NULL':
-        return {
-            'op': 'NOT',
-            'condition': {
-                'field': normalized['field'],
-                'op': 'IS NULL',
+        # Support both old format (field) and new format (left/right)
+        if 'left' in normalized:
+            return {
+                'op': 'NOT',
+                'condition': {
+                    'op': 'IS NULL',
+                    'left': normalized['left'],
+                    'right': normalized.get('right', {'value': None}),
+                }
             }
-        }
+        # Fallback to old format (should not happen, but for compatibility)
+        if 'field' in normalized:
+            return {
+                'op': 'NOT',
+                'condition': {
+                    'op': 'IS NULL',
+                    'left': {'field': normalized['field']},
+                    'right': {'value': None},
+                }
+            }
     
     # Handle NOT(BETWEEN(...)) -> NOT BETWEEN normalization
     if op == 'NOT' and 'condition' in normalized:
@@ -176,127 +183,57 @@ def _normalize_condition(condition: dict[str, Any]) -> dict[str, Any]:
                 'high': condition.get('high'),
             }
     
-    # Normalize comparison operators from left/right format to field/op/value format
-    # This handles the difference between JSQL input format and SQL->JSQL output format
+    # Normalize comparison operators using left/right format (no longer using field/value for comparisons)
+    # String operators (LIKE, ILIKE, etc.) still use field/pattern format and are handled separately
     if op and 'left' in normalized and 'right' in normalized:
         left = _normalize_expression(normalized['left'])
         right = _normalize_expression(normalized['right'])
         
-        # Handle LIKE operator: left/right -> field/pattern
-        if op == 'LIKE' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'LIKE',
-                'pattern': right['value'],
-            }
-        
-        # Handle NOT LIKE operator: left/right -> field/pattern
-        if op == 'NOT LIKE' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'NOT LIKE',
-                'pattern': right['value'],
-            }
-        
-        # Handle ILIKE operator: left/right -> field/pattern
-        if op == 'ILIKE' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'ILIKE',
-                'pattern': right['value'],
-            }
-        
-        # Handle NOT ILIKE operator: left/right -> field/pattern
-        if op == 'NOT ILIKE' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'NOT ILIKE',
-                'pattern': right['value'],
-            }
-        
-        # Handle SIMILAR TO operator: left/right -> field/pattern
-        if op == 'SIMILAR TO' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'SIMILAR TO',
-                'pattern': right['value'],
-            }
-        
-        # Handle REGEXP operator: left/right -> field/pattern
-        if op == 'REGEXP' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'REGEXP',
-                'pattern': right['value'],
-            }
-        
-        # Handle RLIKE operator: left/right -> field/pattern
-        if op == 'RLIKE' and 'field' in left and 'value' in right:
-            return {
-                'field': left['field'],
-                'op': 'RLIKE',
-                'pattern': right['value'],
-            }
-        
-        # Handle IN operator: left/right/values -> field/values or field/subquery
+        # Handle IN operator with subquery: keep left/right format
         if op == 'IN':
             # Check if right side is a subquery (has 'from' and 'select')
             if 'from' in right and 'select' in right:
-                # Right side is a subquery - normalize it recursively
-                if 'field' in left:
-                    return {
-                        'field': left['field'],
-                        'op': 'IN',
-                        'right': _normalize_jsql(right),  # Recursively normalize subquery
-                    }
-            # Check if values are in right.values (from original format) or already in normalized
+                # Right side is a subquery - normalize it recursively, keep left/right format
+                return {
+                    'op': 'IN',
+                    'left': left,
+                    'right': _normalize_jsql(right),  # Recursively normalize subquery
+                }
+            # Check if values are in right.values or already in normalized
             values = None
             if 'values' in right:
                 values = right['values']
             elif 'values' in normalized:
                 values = normalized['values']
-            if 'field' in left and values is not None:
-                # Don't sort - preserve original order for comparison
+            if values is not None:
+                # Keep left/right format but add values directly
                 return {
-                    'field': left['field'],
                     'op': 'IN',
-                    'values': values,
+                    'left': left,
+                    'right': {'values': values},
                 }
         
-        # Handle NOT IN operator
+        # Handle NOT IN operator - keep left/right format
         if op == 'NOT IN':
             values = None
             if 'values' in right:
                 values = right['values']
             elif 'values' in normalized:
                 values = normalized['values']
-            if 'field' in left and values is not None:
-                # Don't sort - preserve original order for comparison
+            if values is not None:
                 return {
-                    'field': left['field'],
                     'op': 'NOT IN',
-                    'values': values,
+                    'left': left,
+                    'right': {'values': values},
                 }
         
-        # Handle simple comparison operators: left/right -> field/op/value
-        if 'field' in left:
-            new_condition = {
-                'field': left['field'],
-                'op': op,
-            }
-            if 'value' in right:
-                new_condition['value'] = right['value']
-            elif 'field' in right:
-                new_condition['right_field'] = right['field']
-            elif 'from' in right and 'select' in right:
-                # Right side is a subquery - keep it as 'right' for comparison
-                new_condition['right'] = right
-            else:
-                # Keep original format if right side is complex
-                normalized['left'] = left
-                normalized['right'] = right
-                return normalized
-            return new_condition
+        # Keep left/right format for all comparison operators (==, !=, <, >, <=, >=)
+        # String operators (LIKE, ILIKE, etc.) use field/pattern and are not processed here
+        return {
+            'op': op,
+            'left': left,
+            'right': right,
+        }
     
     # Recursively normalize nested conditions
     if 'conditions' in normalized:

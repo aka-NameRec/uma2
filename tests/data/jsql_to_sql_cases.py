@@ -468,7 +468,8 @@ NULL_CHECKS = [
             'select': [{'field': 'id'}, {'field': 'email'}],
             'where': {
                 'op': 'IS NULL',
-                'field': 'email',
+                'left': {'field': 'email'},
+                'right': {'value': None},
             },
         },
         expected_sql='SELECT id, email FROM users WHERE email IS NULL',
@@ -481,7 +482,8 @@ NULL_CHECKS = [
             'select': [{'field': 'id'}, {'field': 'email'}],
             'where': {
                 'op': 'IS NOT NULL',
-                'field': 'email',
+                'left': {'field': 'email'},
+                'right': {'value': None},
             },
         },
         expected_sql='SELECT id, email FROM users WHERE NOT email IS NULL',

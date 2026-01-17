@@ -306,6 +306,38 @@ def convert_not_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     return exp.NotExists(this=subquery)
 
 
+def _extract_right_expression(cond_spec: dict[str, Any]) -> exp.Expression:
+    """
+    Extract right expression from condition spec, supporting multiple formats.
+    
+    Supports:
+    - 'right': Full expression specification (new format)
+    - 'value': Literal value
+    - 'right_field': Field reference (legacy)
+    
+    Args:
+        cond_spec: Condition specification dictionary
+        
+    Returns:
+        SQLGlot expression for the right side
+        
+    Raises:
+        MissingFieldError: If no right operand is found
+    """
+    if 'right' in cond_spec:
+        return jsql_expression_to_sqlglot(cond_spec['right'])
+    if 'value' in cond_spec:
+        return jsql_expression_to_sqlglot({'value': cond_spec['value']})
+    if 'right_field' in cond_spec:
+        return jsql_expression_to_sqlglot({'field': cond_spec['right_field']})
+    
+    raise MissingFieldError(
+        'value, right_field, or right',
+        path='right',
+        context='comparison requires right operand'
+    )
+
+
 def _make_string_handler(op: str):
     """Create a handler function for a string operator."""
     def handler(spec: dict[str, Any]) -> exp.Expression:
@@ -345,10 +377,11 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
     """
     Convert comparison operator to sqlglot expression.
 
-    Supports both old and new JSQL formats:
-    - Old: {"op": ">=", "field": "created", "value": "2025-12-18"}
-    - New: {"op": ">=", "left": {"field": "created"}, "right": {"value": "2025-12-18"}}
+    Supports JSQL format with left/right expressions:
+    - {"op": ">=", "left": {"field": "created"}, "right": {"value": "2025-12-18"}}
     - BETWEEN: {"op": "BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
+
+    Note: Old format with "field"/"value" is no longer supported. Use "left"/"right" format.
 
     Raises:
         MissingFieldError: If required field is missing
@@ -361,48 +394,15 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
         return handler(cond_spec)
 
     # Extract left and right expressions for standard comparison operators
-    # Check for new format (left/right) first
-    if 'left' in cond_spec and 'right' in cond_spec:
+    # Use new format (left/right) - old format (field/value) is no longer supported
+    if 'left' in cond_spec:
         left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-        right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-    # Check for new format with left expression and right value/field/expression
-    elif 'left' in cond_spec:
-        left_expr = jsql_expression_to_sqlglot(cond_spec['left'])
-        # Get right side
-        if 'value' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot({'value': cond_spec['value']})
-        elif 'right_field' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right_field'])
-        elif 'right' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-        else:
-            raise MissingFieldError(
-                'value, right_field, or right',
-                path='',
-                context='comparison requires right operand'
-            )
-    # Fall back to old format (field/value/right_field/right)
-    elif 'field' in cond_spec:
-        left_expr = jsql_expression_to_sqlglot(cond_spec['field'])
-        # Get right side (value, right_field, or right expression)
-        if 'value' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot({'value': cond_spec['value']})
-        elif 'right_field' in cond_spec:
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right_field'])
-        elif 'right' in cond_spec:
-            # Right side is a full expression (function, subquery, etc.)
-            right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-        else:
-            raise MissingFieldError(
-                'value, right_field, or right',
-                path='',
-                context='comparison requires right operand'
-            )
+        right_expr = _extract_right_expression(cond_spec)
     else:
         raise MissingFieldError(
-            'left/right, left, or field',
-            path='',
-            context='comparison operation requires left and right operands'
+            'left',
+            path='left',
+            context='comparison operation requires left operand (use left/right format, not field/value)'
         )
 
     # Handle standard comparison operators
