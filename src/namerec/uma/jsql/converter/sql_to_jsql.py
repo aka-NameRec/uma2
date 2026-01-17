@@ -68,6 +68,21 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         # Convert to JSQL
         jsql: JSQLQuery = {}
 
+        # WITH clause (CTEs) - sqlglot uses 'with_' key
+        if parsed.args.get('with_'):
+            from namerec.uma.jsql.converter.conditions import _convert_sqlglot_select_to_jsql
+            ctes = []
+            for cte in parsed.args['with_'].expressions:
+                if isinstance(cte, exp.CTE):
+                    cte_name = cte.alias
+                    cte_query = _convert_sqlglot_select_to_jsql(cte.this)
+                    ctes.append({
+                        'name': cte_name,
+                        'query': cte_query,
+                    })
+            if ctes:
+                jsql['with'] = ctes
+
         # FROM clause
         if from_expr := parsed.args.get('from_'):
             if isinstance(from_expr, exp.From):

@@ -144,6 +144,7 @@ def jsql_query_to_sqlglot(jsql: dict[str, Any]) -> exp.Select:
 
     # Add ORDER BY
     if order_by := jsql.get('order_by'):
+        order_exprs = []
         for order_spec in order_by:
             # Handle both string and dict formats
             if isinstance(order_spec, dict):
@@ -156,7 +157,12 @@ def jsql_query_to_sqlglot(jsql: dict[str, Any]) -> exp.Select:
 
             if order_expr:
                 desc = direction == OrderDirection.DESC.value.upper()
-                query = query.order_by(order_expr, desc=desc)
+                # Create Ordered expression directly to preserve DESC
+                ordered_expr = exp.Ordered(this=order_expr, desc=desc)
+                order_exprs.append(ordered_expr)
+        
+        if order_exprs:
+            query = query.order_by(*order_exprs)
 
     # Add LIMIT
     if limit := jsql.get('limit'):
