@@ -167,11 +167,89 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
 
     # Handle literals
     if isinstance(expr, exp.Literal):
+        value = expr.this
+        # Preserve numeric types - sqlglot stores numbers as strings in expr.this
+        if expr.is_int:
+            value = int(value)
+        elif expr.is_number:
+            value = float(value)
+        return {'value': value}
+
+    # Handle boolean values (TRUE/FALSE)
+    if isinstance(expr, exp.Boolean):
         return {'value': expr.this}
 
     # Handle star (SELECT *)
     if isinstance(expr, exp.Star):
         return {'field': '*'}
+
+    # Handle subqueries
+    if isinstance(expr, exp.Subquery):
+        from namerec.uma.jsql.converter.conditions import _convert_sqlglot_select_to_jsql
+        subquery_jsql = _convert_sqlglot_select_to_jsql(expr.this)
+        return subquery_jsql
+
+    # Handle window functions (functions with OVER clause)
+    if isinstance(expr, exp.Window):
+        # Get the function inside the window
+        func_expr = expr.this
+        if isinstance(func_expr, exp.Func):
+            func_name = func_expr.sql_name()
+            args = [
+                converted
+                for arg in func_expr.args.values()
+                if isinstance(arg, exp.Expression) and (converted := convert_expression_to_jsql(arg)) is not None
+            ]
+            
+            result: dict[str, Any] = {
+                'func': func_name,
+            }
+            if args:
+                result['args'] = args
+            
+            # Handle OVER clause
+            over_spec: dict[str, Any] = {}
+            
+            # PARTITION BY - can be a list directly or an object with expressions
+            if expr.args.get('partition_by'):
+                partition_by = []
+                part_by_arg = expr.args['partition_by']
+                if isinstance(part_by_arg, list):
+                    # Already a list
+                    for part_expr in part_by_arg:
+                        part_jsql = convert_expression_to_jsql(part_expr)
+                        partition_by.append(part_jsql)
+                elif hasattr(part_by_arg, 'expressions'):
+                    # Object with expressions attribute
+                    for part_expr in part_by_arg.expressions:
+                        part_jsql = convert_expression_to_jsql(part_expr)
+                        partition_by.append(part_jsql)
+                if partition_by:
+                    over_spec['partition_by'] = partition_by
+            
+            # ORDER BY in OVER clause
+            if expr.args.get('order'):
+                order_by = []
+                order_arg = expr.args['order']
+                if isinstance(order_arg, list):
+                    # Already a list
+                    for order_expr in order_arg:
+                        from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
+                        order_jsql = convert_order_to_jsql(order_expr)
+                        order_by.append(order_jsql)
+                elif hasattr(order_arg, 'expressions'):
+                    # Object with expressions attribute
+                    for order_expr in order_arg.expressions:
+                        from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
+                        order_jsql = convert_order_to_jsql(order_expr)
+                        order_by.append(order_jsql)
+                if order_by:
+                    over_spec['order_by'] = order_by
+            
+            if over_spec:
+                result['over'] = over_spec
+            
+            return result
 
     # Handle functions
     if isinstance(expr, exp.Func):

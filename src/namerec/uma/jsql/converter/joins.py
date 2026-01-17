@@ -70,9 +70,13 @@ def convert_join_to_jsql(join: exp.Join) -> dict[str, Any]:
         )
 
     # Get join type (use constant mapping)
-    join_type = JoinType.INNER.value
-    if join.side:
+    # Check for CROSS JOIN first (it uses 'kind' attribute, not 'side')
+    if join.kind and join.kind.upper() == 'CROSS':
+        join_type = JoinType.CROSS.value
+    elif join.side:
         join_type = SQLGLOT_JOIN_SIDE_TO_TYPE.get(join.side, JoinType.INNER.value)
+    else:
+        join_type = JoinType.INNER.value
 
     # Get joined table
     table = join.this
