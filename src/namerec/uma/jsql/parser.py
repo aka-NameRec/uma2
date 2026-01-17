@@ -74,6 +74,9 @@ class JSQLParser:
             JSQLOperator.NOT_LIKE: self._handle_not_like,
             JSQLOperator.ILIKE: self._handle_ilike,
             JSQLOperator.NOT_ILIKE: self._handle_not_ilike,
+            JSQLOperator.SIMILAR_TO: self._handle_similar_to,
+            JSQLOperator.REGEXP: self._handle_regexp,
+            JSQLOperator.RLIKE: self._handle_rlike,
         }
 
     async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig, dict[str, str]]:
@@ -792,6 +795,48 @@ class JSQLParser:
         
         return ~expr.between(low, high)
 
+    async def _handle_similar_to(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle SIMILAR TO operator (PostgreSQL regex pattern matching)."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.SIMILAR_TO.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.SIMILAR_TO.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        
+        # SQLAlchemy doesn't have built-in SIMILAR TO, use op() method
+        return left.op('SIMILAR TO')(right)
+
+    async def _handle_regexp(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle REGEXP operator (MySQL/PostgreSQL regex pattern matching)."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.REGEXP.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.REGEXP.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        
+        # SQLAlchemy uses regexp_match or op() method depending on dialect
+        return left.op('REGEXP')(right)
+
+    async def _handle_rlike(self, condition_spec: JSQLExpression) -> ClauseElement:
+        """Handle RLIKE operator (MySQL regex pattern matching, alias for REGEXP)."""
+        if JSQLField.LEFT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.RLIKE.value} operator must have "{JSQLField.LEFT.value}" field')
+        if JSQLField.RIGHT.value not in condition_spec:
+            raise JSQLSyntaxError(f'{JSQLOperator.RLIKE.value} operator must have "{JSQLField.RIGHT.value}" field')
+
+        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
+        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        
+        # RLIKE is MySQL alias for REGEXP
+        return left.op('RLIKE')(right)
+
     async def _build_condition(self, condition_spec: JSQLExpression) -> ClauseElement:
         """
         Build WHERE/HAVING condition.
@@ -911,6 +956,11 @@ class JSQLParser:
                         return left / right
                     case JSQLOperator.MOD:
                         return left % right
+                    case JSQLOperator.CONCAT:
+                        # String concatenation operator ||
+                        # SQLAlchemy handles || differently per dialect
+                        # Use op() to generate exact SQL operator
+                        return left.op('||')(right)
 
             # This might be a condition (for CASE WHEN)
             return await self._build_condition(expr_spec)

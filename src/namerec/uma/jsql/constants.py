@@ -85,6 +85,9 @@ class JSQLOperator(str, Enum):
     NOT_LIKE = 'NOT LIKE'
     ILIKE = 'ILIKE'
     NOT_ILIKE = 'NOT ILIKE'
+    SIMILAR_TO = 'SIMILAR TO'
+    REGEXP = 'REGEXP'
+    RLIKE = 'RLIKE'
 
     # Arithmetic operators
     ADD = '+'
@@ -92,6 +95,7 @@ class JSQLOperator(str, Enum):
     MUL = '*'
     DIV = '/'
     MOD = '%'
+    CONCAT = '||'  # String concatenation operator
 
 
 class JoinType(str, Enum):
@@ -128,4 +132,5 @@ ARITHMETIC_OPERATORS = frozenset({
     JSQLOperator.MUL,
     JSQLOperator.DIV,
     JSQLOperator.MOD,
+    JSQLOperator.CONCAT,  # String concatenation
 })

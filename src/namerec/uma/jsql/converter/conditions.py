@@ -330,6 +330,28 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
         logger.debug(f'Processing NOT ILIKE operator with pattern: {pattern}')
         return exp.NotILike(this=left_expr, expression=exp.Literal.string(pattern))
 
+    if op == JSQLOperator.SIMILAR_TO.value:
+        if 'pattern' not in cond_spec:
+            raise MissingFieldError('pattern', path='pattern', context='SIMILAR TO operator')
+        pattern = cond_spec['pattern']
+        logger.debug(f'Processing SIMILAR TO operator with pattern: {pattern}')
+        return exp.SimilarTo(this=left_expr, expression=exp.Literal.string(pattern))
+
+    if op == JSQLOperator.REGEXP.value:
+        if 'pattern' not in cond_spec:
+            raise MissingFieldError('pattern', path='pattern', context='REGEXP operator')
+        pattern = cond_spec['pattern']
+        logger.debug(f'Processing REGEXP operator with pattern: {pattern}')
+        return exp.RegexpLike(this=left_expr, expression=exp.Literal.string(pattern))
+
+    if op == JSQLOperator.RLIKE.value:
+        if 'pattern' not in cond_spec:
+            raise MissingFieldError('pattern', path='pattern', context='RLIKE operator')
+        pattern = cond_spec['pattern']
+        logger.debug(f'Processing RLIKE operator with pattern: {pattern}')
+        # RLIKE is alias for REGEXP in MySQL
+        return exp.RegexpLike(this=left_expr, expression=exp.Literal.string(pattern))
+
     if op == JSQLOperator.IS_NULL.value:
         return exp.Is(this=left_expr, expression=exp.Null())
 
@@ -346,6 +368,9 @@ def convert_comparison_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expre
         JSQLOperator.NOT_LIKE.value,
         JSQLOperator.ILIKE.value,
         JSQLOperator.NOT_ILIKE.value,
+        JSQLOperator.SIMILAR_TO.value,
+        JSQLOperator.REGEXP.value,
+        JSQLOperator.RLIKE.value,
         JSQLOperator.IS_NULL.value,
         JSQLOperator.IS_NOT_NULL.value,
     ]
@@ -566,6 +591,55 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
         return {
             'field': left['field'],
             'op': JSQLOperator.NOT_ILIKE.value,
+            'pattern': right['value'],
+        }
+
+    if isinstance(expr, exp.SimilarTo):
+        left = convert_expression_to_jsql(expr.this)
+        right = convert_expression_to_jsql(expr.expression)
+
+        if 'field' not in left:
+            raise InvalidExpressionError(
+                message='SIMILAR TO operator left side must be a field reference',
+                path='left',
+                expression=left
+            )
+
+        if 'value' not in right:
+            raise InvalidExpressionError(
+                message='SIMILAR TO operator right side must be a string literal',
+                path='right',
+                expression=right
+            )
+
+        return {
+            'field': left['field'],
+            'op': JSQLOperator.SIMILAR_TO.value,
+            'pattern': right['value'],
+        }
+
+    if isinstance(expr, exp.RegexpLike):
+        left = convert_expression_to_jsql(expr.this)
+        right = convert_expression_to_jsql(expr.expression)
+
+        if 'field' not in left:
+            raise InvalidExpressionError(
+                message='REGEXP/RLIKE operator left side must be a field reference',
+                path='left',
+                expression=left
+            )
+
+        if 'value' not in right:
+            raise InvalidExpressionError(
+                message='REGEXP/RLIKE operator right side must be a string literal',
+                path='right',
+                expression=right
+            )
+
+        # Use REGEXP as default (RLIKE is MySQL alias)
+        return {
+            'field': left['field'],
+            'op': JSQLOperator.REGEXP.value,
             'pattern': right['value'],
         }
 

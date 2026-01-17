@@ -119,13 +119,19 @@ def convert_arithmetic_op(expr_spec: dict[str, Any]) -> exp.Expression:
     left = jsql_expression_to_sqlglot(expr_spec['left'])
     right = jsql_expression_to_sqlglot(expr_spec['right'])
 
+    # Handle string concatenation operator ||
+    from namerec.uma.jsql.constants import JSQLOperator
+    if op == JSQLOperator.CONCAT.value:
+        # Use Concat function for string concatenation (works across dialects)
+        return exp.Concat(expressions=[left, right])
+
     # Use mapping instead of match statement
     operator_class = ARITHMETIC_OP_TO_SQLGLOT.get(op)
     if not operator_class:
         raise UnknownOperatorError(
             operator=op,
             path='op',
-            supported=list(ARITHMETIC_OP_TO_SQLGLOT.keys())
+            supported=list(ARITHMETIC_OP_TO_SQLGLOT.keys()) + [JSQLOperator.CONCAT.value]
         )
 
     return operator_class(this=left, expression=right)
@@ -178,6 +184,38 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
             'args': args,
         }
 
+    # Handle Concat (string concatenation ||)
+    if isinstance(expr, exp.Concat):
+        # Concat can have multiple expressions in 'expressions' attribute
+        # or use left/right for binary operations
+        from namerec.uma.jsql.constants import JSQLOperator
+        
+        if hasattr(expr, 'expressions') and expr.expressions:
+            expressions = expr.expressions
+        elif hasattr(expr, 'left') and hasattr(expr, 'right'):
+            expressions = [expr.left, expr.right]
+        else:
+            # Fallback: try to get expressions from args
+            expressions = getattr(expr, 'expressions', None) or expr.args.get('expressions', [])
+        
+        if len(expressions) == 2:
+            return {
+                'op': JSQLOperator.CONCAT.value,
+                'left': convert_expression_to_jsql(expressions[0]),
+                'right': convert_expression_to_jsql(expressions[1]),
+            }
+        # For multiple concatenations, convert to nested format
+        # This is rare but possible (e.g., 'a' || 'b' || 'c')
+        if len(expressions) > 2:
+            result = convert_expression_to_jsql(expressions[-1])
+            for expr_item in reversed(expressions[:-1]):
+                result = {
+                    'op': JSQLOperator.CONCAT.value,
+                    'left': convert_expression_to_jsql(expr_item),
+                    'right': result,
+                }
+            return result
+
     # Handle binary operations (use reverse mapping)
     if isinstance(expr, (exp.Add, exp.Sub, exp.Mul, exp.Div)):
         op = SQLGLOT_TO_ARITHMETIC.get(type(expr))
@@ -193,6 +231,11 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
             'left': convert_expression_to_jsql(expr.left),
             'right': convert_expression_to_jsql(expr.right),
         }
+    
+    # Handle string concatenation via || operator (PostgreSQL-style)
+    # sqlglot may represent || as Concat, which we handle above
+    # But some dialects may use a binary operator directly
+    # Check if this is a binary || operator (less common in sqlglot, but possible)
 
     # Default: unsupported expression type
     raise UnsupportedOperationError(

@@ -12,6 +12,7 @@ ARITHMETIC_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
     JSQLOperator.SUB.value: exp.Sub,
     JSQLOperator.MUL.value: exp.Mul,
     JSQLOperator.DIV.value: exp.Div,
+    # Note: || (CONCAT) is handled specially in expressions.py, not here
 }
 
 COMPARISON_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
