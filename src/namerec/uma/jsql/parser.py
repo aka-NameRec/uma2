@@ -6,14 +6,10 @@ from typing import Any
 from sqlalchemy import Column
 from sqlalchemy import Select
 from sqlalchemy import Table
-from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import cast
-from sqlalchemy import exists
 from sqlalchemy import func
 from sqlalchemy import literal
-from sqlalchemy import not_
-from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import ClauseElement
@@ -32,6 +28,10 @@ from namerec.uma.jsql.constants import JSQLField
 from namerec.uma.jsql.constants import JSQLOperator
 from namerec.uma.jsql.constants import OrderDirection
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
+from namerec.uma.jsql.operators.comparison import ComparisonOperatorHandler
+from namerec.uma.jsql.operators.logical import LogicalOperatorHandler
+from namerec.uma.jsql.operators.special import SpecialOperatorHandler
+from namerec.uma.jsql.operators.string import StringOperatorHandler
 from namerec.uma.jsql.types import JSQLExpression
 from namerec.uma.jsql.types import JSQLQuery
 
@@ -56,27 +56,35 @@ class JSQLParser:
         self._param_counter = 0  # Counter for generating unique parameter names
         # Map JSQL parameter names to bindparam objects for proper parameter mapping
         self._param_bindparams: dict[str, Any] = {}  # JSQL param name -> bindparam object
+        # Cache for resolved columns: (field_spec, from_clause_id) -> Column | ColumnElement
+        self._column_cache: dict[tuple[str, int | None], Column | ColumnElement] = {}
+
+        # Initialize operator handlers
+        self._logical_handler = LogicalOperatorHandler(self)
+        self._comparison_handler = ComparisonOperatorHandler(self)
+        self._string_handler = StringOperatorHandler(self)
+        self._special_handler = SpecialOperatorHandler(self)
 
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
-            JSQLOperator.AND: self._handle_and,
-            JSQLOperator.OR: self._handle_or,
-            JSQLOperator.NOT: self._handle_not,
-            JSQLOperator.IN: self._handle_in,
-            JSQLOperator.NOT_IN: self._handle_not_in,
-            JSQLOperator.BETWEEN: self._handle_between,
-            JSQLOperator.NOT_BETWEEN: self._handle_not_between,
-            JSQLOperator.EXISTS: self._handle_exists,
-            JSQLOperator.NOT_EXISTS: self._handle_not_exists,
-            JSQLOperator.IS_NULL: self._handle_is_null,
-            JSQLOperator.IS_NOT_NULL: self._handle_is_not_null,
-            JSQLOperator.LIKE: self._handle_like,
-            JSQLOperator.NOT_LIKE: self._handle_not_like,
-            JSQLOperator.ILIKE: self._handle_ilike,
-            JSQLOperator.NOT_ILIKE: self._handle_not_ilike,
-            JSQLOperator.SIMILAR_TO: self._handle_similar_to,
-            JSQLOperator.REGEXP: self._handle_regexp,
-            JSQLOperator.RLIKE: self._handle_rlike,
+            JSQLOperator.AND: lambda spec: self._logical_handler(spec, JSQLOperator.AND),
+            JSQLOperator.OR: lambda spec: self._logical_handler(spec, JSQLOperator.OR),
+            JSQLOperator.NOT: lambda spec: self._logical_handler(spec, JSQLOperator.NOT),
+            JSQLOperator.IN: lambda spec: self._special_handler(spec, JSQLOperator.IN),
+            JSQLOperator.NOT_IN: lambda spec: self._special_handler(spec, JSQLOperator.NOT_IN),
+            JSQLOperator.BETWEEN: lambda spec: self._special_handler(spec, JSQLOperator.BETWEEN),
+            JSQLOperator.NOT_BETWEEN: lambda spec: self._special_handler(spec, JSQLOperator.NOT_BETWEEN),
+            JSQLOperator.EXISTS: lambda spec: self._special_handler(spec, JSQLOperator.EXISTS),
+            JSQLOperator.NOT_EXISTS: lambda spec: self._special_handler(spec, JSQLOperator.NOT_EXISTS),
+            JSQLOperator.IS_NULL: lambda spec: self._special_handler(spec, JSQLOperator.IS_NULL),
+            JSQLOperator.IS_NOT_NULL: lambda spec: self._special_handler(spec, JSQLOperator.IS_NOT_NULL),
+            JSQLOperator.LIKE: lambda spec: self._string_handler(spec, JSQLOperator.LIKE, False),
+            JSQLOperator.NOT_LIKE: lambda spec: self._string_handler(spec, JSQLOperator.LIKE, True),
+            JSQLOperator.ILIKE: lambda spec: self._string_handler(spec, JSQLOperator.ILIKE, False),
+            JSQLOperator.NOT_ILIKE: lambda spec: self._string_handler(spec, JSQLOperator.ILIKE, True),
+            JSQLOperator.SIMILAR_TO: lambda spec: self._string_handler(spec, JSQLOperator.SIMILAR_TO, False),
+            JSQLOperator.REGEXP: lambda spec: self._string_handler(spec, JSQLOperator.REGEXP, False),
+            JSQLOperator.RLIKE: lambda spec: self._string_handler(spec, JSQLOperator.RLIKE, False),
         }
 
     async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig, dict[str, str]]:
@@ -96,10 +104,13 @@ class JSQLParser:
             ValueError: If namespace not found or no default available
         """
         self.params = params or {}
-        # Reset parameter counter for each parse to ensure unique parameter names
-        self._param_counter = 0
-        # Reset parameter bindparam mapping for each parse
-        self._param_bindparams = {}
+        # Reset state for each parse
+        self._param_counter = 0  # Counter for generating unique parameter names
+        self._param_bindparams = {}  # JSQL param name -> bindparam object
+        self._column_cache = {}  # Cache for resolved columns
+        self.ctes = {}  # CTEs by name (for SQLAlchemy queries)
+        self.select_aliases = {}  # SELECT column aliases
+        self.alias_manager = AliasManager()  # Reset alias manager for each parse
 
         # Parse CTEs if present
         if with_spec := jsql.get(JSQLField.WITH.value):
@@ -479,7 +490,7 @@ class JSQLParser:
 
     async def _resolve_column(self, field_spec: str, from_clause: Any) -> Column | ColumnElement:
         """
-        Resolve column reference (e.g., 'users.id' or 'id').
+        Resolve column reference (e.g., 'users.id' or 'id') with caching.
 
         Args:
             field_spec: Field specification
@@ -491,9 +502,18 @@ class JSQLParser:
         Raises:
             JSQLSyntaxError: If column not found
         """
+        # Create cache key: (field_spec, from_clause_id)
+        # Use id() for from_clause to handle different table objects
+        from_clause_id = id(from_clause) if from_clause is not None else None
+        cache_key = (field_spec, from_clause_id)
+        
+        # Check cache first
+        if cache_key in self._column_cache:
+            return self._column_cache[cache_key]
+        
         # Try to resolve through AliasManager first
         try:
-            return self.alias_manager.resolve_column(field_spec, from_clause)
+            column = self.alias_manager.resolve_column(field_spec, from_clause)
         except JSQLSyntaxError:
             # If qualified column not found in aliases, try lazy loading
             if '.' in field_spec:
@@ -502,12 +522,18 @@ class JSQLParser:
                 try:
                     table = await self._get_table_async(entity_name)
                     if column_name in table.columns:
-                        return table.columns[column_name]
+                        column = table.columns[column_name]
+                    else:
+                        raise JSQLSyntaxError(f'Column "{field_spec}" not found in table "{table_name}"')
                 except (UMANotFoundError, RuntimeError) as e:
                     raise JSQLSyntaxError(f'Column "{field_spec}" not found: {e}') from e
-            
-            # Re-raise original error if lazy loading also fails
-            raise
+            else:
+                # Re-raise original error if lazy loading also fails
+                raise
+        
+        # Cache the result
+        self._column_cache[cache_key] = column
+        return column
 
     async def _process_joins_for_aliases(self, joins_spec: list[dict[str, Any]], base_table: Any) -> Any:
         """
@@ -589,246 +615,6 @@ class JSQLParser:
 
         return current_from
 
-    async def _handle_and(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle AND operator."""
-        if JSQLField.CONDITIONS.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.AND.value} must have "{JSQLField.CONDITIONS.value}" field')
-        conditions = [await self._build_condition(c) for c in condition_spec[JSQLField.CONDITIONS.value]]
-        return and_(*conditions)
-
-    async def _handle_or(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle OR operator."""
-        if JSQLField.CONDITIONS.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.OR.value} must have "{JSQLField.CONDITIONS.value}" field')
-        conditions = [await self._build_condition(c) for c in condition_spec[JSQLField.CONDITIONS.value]]
-        return or_(*conditions)
-
-    async def _handle_not(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle NOT operator."""
-        if JSQLField.CONDITION.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT.value} must have "{JSQLField.CONDITION.value}" field')
-        condition = await self._build_condition(condition_spec[JSQLField.CONDITION.value])
-        return not_(condition)
-
-    async def _handle_comparison(self, op: JSQLOperator, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle comparison operators (=, !=, <, <=, >, >=)."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        # Don't pass expected_type - let SQLAlchemy infer type from comparison context
-        # This allows simple ISO date strings to work without explicit CAST
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
-
-        # Use match-case for operator dispatch
-        match op:
-            case JSQLOperator.EQ:
-                return left == right
-            case JSQLOperator.NE | JSQLOperator.NEQ_ISO:
-                return left != right
-            case JSQLOperator.LT:
-                return left < right
-            case JSQLOperator.LE:
-                return left <= right
-            case JSQLOperator.GT:
-                return left > right
-            case JSQLOperator.GE:
-                return left >= right
-            case _:
-                raise JSQLSyntaxError(f'Unknown comparison operator: {op.value}')
-
-    async def _handle_in(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle IN operator."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.IN.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.IN.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        right_spec = condition_spec[JSQLField.RIGHT.value]
-
-        # Subquery
-        if isinstance(right_spec, dict) and JSQLField.SUBQUERY.value in right_spec:
-            subquery = await self._build_query(right_spec[JSQLField.SUBQUERY.value])
-            return left.in_(subquery)
-
-        # List of values
-        if isinstance(right_spec, list):
-            return left.in_(right_spec)
-
-        # Expression
-        right = await self._build_expression(right_spec)
-        return left.in_(right)
-
-    async def _handle_not_in(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle NOT IN operator."""
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_IN.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_IN.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        right_spec = condition_spec[JSQLField.RIGHT.value]
-
-        # Subquery
-        if isinstance(right_spec, dict) and JSQLField.SUBQUERY.value in right_spec:
-            subquery = await self._build_query(right_spec[JSQLField.SUBQUERY.value])
-            return ~left.in_(subquery)
-
-        # List of values
-        if isinstance(right_spec, list):
-            return ~left.in_(right_spec)
-
-        # Expression
-        right = await self._build_expression(right_spec)
-        return ~left.in_(right)
-
-    async def _handle_exists(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle EXISTS operator."""
-        if JSQLField.SUBQUERY.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.EXISTS.value} must have "{JSQLField.SUBQUERY.value}" field')
-        subquery = await self._build_query(condition_spec[JSQLField.SUBQUERY.value])
-        return exists(subquery)
-
-    async def _handle_not_exists(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle NOT EXISTS operator."""
-        if JSQLField.SUBQUERY.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.NOT_EXISTS.value} must have "{JSQLField.SUBQUERY.value}" field')
-        subquery = await self._build_query(condition_spec[JSQLField.SUBQUERY.value])
-        return ~exists(subquery)
-
-    async def _handle_is_null(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle IS NULL operator."""
-        if JSQLField.EXPR.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.IS_NULL.value} must have "{JSQLField.EXPR.value}" field')
-        expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
-        return expr.is_(None)
-
-    async def _handle_is_not_null(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle IS NOT NULL operator."""
-        if JSQLField.EXPR.value not in condition_spec:
-            raise JSQLSyntaxError(f'{JSQLOperator.IS_NOT_NULL.value} must have "{JSQLField.EXPR.value}" field')
-        expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
-        return expr.isnot(None)
-
-    async def _handle_string_operator(
-        self,
-        condition_spec: JSQLExpression,
-        operator: JSQLOperator,
-        negate: bool = False
-    ) -> ClauseElement:
-        """
-        Handle string matching operators (LIKE, ILIKE, SIMILAR TO, REGEXP, RLIKE).
-
-        Args:
-            condition_spec: JSQL condition specification
-            operator: String operator to handle
-            negate: Whether to negate the result (for NOT operators)
-
-        Returns:
-            SQLAlchemy clause element
-        """
-        if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.LEFT.value}" field')
-        if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.RIGHT.value}" field')
-
-        left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        left_type = self._extract_expression_type(left)
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
-
-        # Map operator to SQLAlchemy method
-        if operator == JSQLOperator.LIKE:
-            result = left.like(right)
-        elif operator == JSQLOperator.ILIKE:
-            result = left.ilike(right)
-        elif operator == JSQLOperator.SIMILAR_TO:
-            # SQLAlchemy doesn't have built-in SIMILAR TO, use op() method
-            result = left.op('SIMILAR TO')(right)
-        elif operator == JSQLOperator.REGEXP:
-            # SQLAlchemy uses regexp_match or op() method depending on dialect
-            result = left.op('REGEXP')(right)
-        elif operator == JSQLOperator.RLIKE:
-            # RLIKE is MySQL alias for REGEXP
-            result = left.op('RLIKE')(right)
-        else:
-            raise JSQLSyntaxError(f'Unknown string operator: {operator.value}')
-
-        return ~result if negate else result
-
-    async def _handle_like(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle LIKE operator."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.LIKE, negate=False)
-
-    async def _handle_not_like(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle NOT LIKE operator."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.LIKE, negate=True)
-
-    async def _handle_ilike(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle ILIKE operator."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.ILIKE, negate=False)
-
-    async def _handle_not_ilike(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle NOT ILIKE operator."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.ILIKE, negate=True)
-
-    async def _handle_between(
-        self,
-        condition_spec: JSQLExpression,
-        negate: bool = False
-    ) -> ClauseElement:
-        """
-        Handle BETWEEN operator (with optional negation).
-
-        JSQL format: {"op": "BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
-        SQL equivalent: expr BETWEEN low AND high (or NOT BETWEEN if negate=True)
-
-        Args:
-            condition_spec: JSQL condition specification
-            negate: Whether to negate the result (for NOT BETWEEN)
-
-        Returns:
-            SQLAlchemy clause element
-        """
-        operator = JSQLOperator.NOT_BETWEEN if negate else JSQLOperator.BETWEEN
-        
-        if JSQLField.EXPR.value not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} must have "{JSQLField.EXPR.value}" field')
-        if 'low' not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} must have "low" field')
-        if 'high' not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} must have "high" field')
-
-        expr = await self._build_expression(condition_spec[JSQLField.EXPR.value])
-        expr_type = self._extract_expression_type(expr)
-        low = await self._build_expression(condition_spec['low'], expected_type=expr_type)
-        high = await self._build_expression(condition_spec['high'], expected_type=expr_type)
-        
-        result = expr.between(low, high)
-        return ~result if negate else result
-
-    async def _handle_not_between(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """
-        Handle NOT BETWEEN operator.
-        
-        JSQL format: {"op": "NOT BETWEEN", "expr": {...}, "low": {...}, "high": {...}}
-        SQL equivalent: expr NOT BETWEEN low AND high
-        """
-        return await self._handle_between(condition_spec, negate=True)
-
-    async def _handle_similar_to(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle SIMILAR TO operator (PostgreSQL regex pattern matching)."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.SIMILAR_TO, negate=False)
-
-    async def _handle_regexp(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle REGEXP operator (MySQL/PostgreSQL regex pattern matching)."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.REGEXP, negate=False)
-
-    async def _handle_rlike(self, condition_spec: JSQLExpression) -> ClauseElement:
-        """Handle RLIKE operator (MySQL regex pattern matching, alias for REGEXP)."""
-        return await self._handle_string_operator(condition_spec, JSQLOperator.RLIKE, negate=False)
 
     async def _build_condition(self, condition_spec: JSQLExpression) -> ClauseElement:
         """
@@ -860,7 +646,7 @@ class JSQLParser:
 
         # Handle comparison operators
         if op in COMPARISON_OPERATORS:
-            return await self._handle_comparison(op, condition_spec)
+            return await self._comparison_handler(condition_spec, op)
 
         raise JSQLSyntaxError(f'Unsupported operator: {op_str}')
 
