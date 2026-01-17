@@ -366,12 +366,12 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
                 'pattern': right['value'],
             }
         
-            # Handle NOT(BETWEEN(...)) pattern - convert to NOT BETWEEN
-            if isinstance(inner, exp.Between):
-                expr_jsql = convert_expression_to_jsql(inner.this)
-                low_jsql = convert_expression_to_jsql(inner.args.get('low'))
-                high_jsql = convert_expression_to_jsql(inner.args.get('high'))
-            
+        # Handle NOT(BETWEEN(...)) pattern - convert to NOT BETWEEN
+        if isinstance(inner, exp.Between):
+            expr_jsql = convert_expression_to_jsql(inner.this)
+            low_jsql = convert_expression_to_jsql(inner.args.get('low'))
+            high_jsql = convert_expression_to_jsql(inner.args.get('high'))
+        
             result = {
                 'op': JSQLOperator.NOT_BETWEEN.value,
             }

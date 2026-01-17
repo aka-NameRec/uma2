@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 # Will be initialized after all handler functions are defined
 _COMPARISON_OPERATOR_HANDLERS: dict[str, callable] = {}
 
+# String operator mapping: (SQLGlot class, negate_flag)
+_STRING_OP_TO_SQLGLOT: dict[str, tuple[type[exp.Expression], bool]] = {
+    JSQLOperator.LIKE.value: (exp.Like, False),
+    JSQLOperator.NOT_LIKE.value: (exp.Like, True),  # Will be wrapped in Not
+    JSQLOperator.ILIKE.value: (exp.ILike, False),
+    JSQLOperator.NOT_ILIKE.value: (exp.ILike, True),  # Will be wrapped in Not
+    JSQLOperator.SIMILAR_TO.value: (exp.SimilarTo, False),
+    JSQLOperator.REGEXP.value: (exp.RegexpLike, False),
+    JSQLOperator.RLIKE.value: (exp.RegexpLike, False),
+}
+
 
 def convert_is_null(cond_spec: dict[str, Any]) -> exp.Expression:
     """Convert IS NULL operator to sqlglot expression."""
@@ -115,61 +126,35 @@ def convert_string_operator(
     Returns:
         SQLGlot expression
     """
+    # Get operator mapping
+    op_mapping = _STRING_OP_TO_SQLGLOT.get(op)
+    if not op_mapping:
+        supported = list(_STRING_OP_TO_SQLGLOT.keys())
+        raise UnknownOperatorError(operator=op, path='op', supported=supported)
+    
+    op_class, negate = op_mapping
+    
+    # Extract pattern or right expression
     pattern = extract_pattern(cond_spec)
     
-    # If pattern is None, use right expression directly (might be column reference or function)
     if pattern is None:
+        # Use right expression directly (might be column reference or function)
         if 'right' not in cond_spec:
             raise MissingFieldError('pattern or right', path='pattern/right', context=f'{op} operator')
         right_expr = jsql_expression_to_sqlglot(cond_spec['right'])
-        
-        # Map operator to SQLGlot class for expression-based matching
-        if op == JSQLOperator.LIKE.value:
-            return exp.Like(this=left_expr, expression=right_expr)
-        elif op == JSQLOperator.NOT_LIKE.value:
-            return exp.Not(this=exp.Like(this=left_expr, expression=right_expr))
-        elif op == JSQLOperator.ILIKE.value:
-            return exp.ILike(this=left_expr, expression=right_expr)
-        elif op == JSQLOperator.NOT_ILIKE.value:
-            return exp.NotILike(this=left_expr, expression=right_expr)
-        elif op == JSQLOperator.SIMILAR_TO.value:
-            return exp.SimilarTo(this=left_expr, expression=right_expr)
-        elif op == JSQLOperator.REGEXP.value:
-            return exp.RegexpLike(this=left_expr, expression=right_expr)
-        elif op == JSQLOperator.RLIKE.value:
-            return exp.RegexpLike(this=left_expr, expression=right_expr)
-        else:
-            raise UnknownOperatorError(operator=op, path='op', supported=[
-                JSQLOperator.LIKE.value, JSQLOperator.NOT_LIKE.value,
-                JSQLOperator.ILIKE.value, JSQLOperator.NOT_ILIKE.value,
-                JSQLOperator.SIMILAR_TO.value, JSQLOperator.REGEXP.value, JSQLOperator.RLIKE.value
-            ])
-    
-    # Use pattern as string literal
-    pattern_literal = exp.Literal.string(pattern)
-    logger.debug(f'Processing {op} operator with pattern: {pattern}')
-    
-    # Map operator to SQLGlot class for pattern-based matching
-    if op == JSQLOperator.LIKE.value:
-        return exp.Like(this=left_expr, expression=pattern_literal)
-    elif op == JSQLOperator.NOT_LIKE.value:
-        return exp.Not(this=exp.Like(this=left_expr, expression=pattern_literal))
-    elif op == JSQLOperator.ILIKE.value:
-        return exp.ILike(this=left_expr, expression=pattern_literal)
-    elif op == JSQLOperator.NOT_ILIKE.value:
-        return exp.NotILike(this=left_expr, expression=pattern_literal)
-    elif op == JSQLOperator.SIMILAR_TO.value:
-        return exp.SimilarTo(this=left_expr, expression=pattern_literal)
-    elif op == JSQLOperator.REGEXP.value:
-        return exp.RegexpLike(this=left_expr, expression=pattern_literal)
-    elif op == JSQLOperator.RLIKE.value:
-        return exp.RegexpLike(this=left_expr, expression=pattern_literal)
     else:
-        raise UnknownOperatorError(operator=op, path='op', supported=[
-            JSQLOperator.LIKE.value, JSQLOperator.NOT_LIKE.value,
-            JSQLOperator.ILIKE.value, JSQLOperator.NOT_ILIKE.value,
-            JSQLOperator.SIMILAR_TO.value, JSQLOperator.REGEXP.value, JSQLOperator.RLIKE.value
-        ])
+        # Use pattern as string literal
+        right_expr = exp.Literal.string(pattern)
+        logger.debug(f'Processing {op} operator with pattern: {pattern}')
+    
+    # Create expression using mapped class
+    result = op_class(this=left_expr, expression=right_expr)
+    
+    # Apply negation if needed (for NOT LIKE)
+    if negate:
+        return exp.Not(this=result)
+    
+    return result
 
 
 def convert_standard_comparison(
@@ -389,6 +374,13 @@ def convert_not_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     return exp.NotExists(expression=subquery)
 
 
+def _make_string_handler(op: str):
+    """Create a handler function for a string operator."""
+    def handler(spec: dict[str, Any]) -> exp.Expression:
+        return convert_string_operator(op, spec, extract_left_expression(spec))
+    return handler
+
+
 def _init_comparison_handlers() -> None:
     """Initialize comparison operator handler registry."""
     # Register special operator handlers
@@ -399,7 +391,7 @@ def _init_comparison_handlers() -> None:
     _COMPARISON_OPERATOR_HANDLERS[JSQLOperator.IN.value] = lambda spec: convert_in_operator(JSQLOperator.IN.value, spec)
     _COMPARISON_OPERATOR_HANDLERS[JSQLOperator.NOT_IN.value] = lambda spec: convert_in_operator(JSQLOperator.NOT_IN.value, spec)
     
-    # Register string operator handlers
+    # Register string operator handlers using factory function to avoid lambda capture issues
     string_operators = {
         JSQLOperator.LIKE.value,
         JSQLOperator.NOT_LIKE.value,
@@ -410,7 +402,7 @@ def _init_comparison_handlers() -> None:
         JSQLOperator.RLIKE.value,
     }
     for op in string_operators:
-        _COMPARISON_OPERATOR_HANDLERS[op] = lambda spec, op=op: convert_string_operator(op, spec, extract_left_expression(spec))
+        _COMPARISON_OPERATOR_HANDLERS[op] = _make_string_handler(op)
 
 
 # Initialize handler registry on module import
@@ -493,8 +485,11 @@ def _convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
     
     Helper function for EXISTS and NOT EXISTS subqueries.
     """
+    # Lazy imports to avoid circular dependencies
     from namerec.uma.jsql.converter.joins import convert_join_to_jsql
     from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
+    from namerec.uma.jsql.converter.conditions.to_jsql import convert_condition_to_jsql
+    from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
     from namerec.uma.jsql.constants import JSQLField
     
     jsql: dict[str, Any] = {}
@@ -573,7 +568,3 @@ def _convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
         jsql['having'] = having_jsql
     
     return jsql
-
-
-# Initialize handler registry on module import
-_init_comparison_handlers()

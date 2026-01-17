@@ -317,6 +317,80 @@ PATTERN_MATCHING_OPERATORS = [
         expected_sql="SELECT id, email FROM users WHERE NOT email LIKE '%@example.com'",
         description='Pattern matching: NOT LIKE operator',
     ),
+    create_test_case(
+        name='pattern_matching_ilike',
+        jsql={
+            'from': 'users',
+            'select': [{'field': 'id'}, {'field': 'name'}],
+            'where': {
+                'op': 'ILIKE',
+                'left': {'field': 'name'},
+                'right': {'value': '%john%'},
+            },
+        },
+        # SQLite doesn't support ILIKE, so SQLGlot converts it to LOWER(...) LIKE LOWER(...)
+        expected_sql="SELECT id, name FROM users WHERE LOWER(name) LIKE LOWER('%john%')",
+        description='Pattern matching: ILIKE operator (case-insensitive LIKE)',
+    ),
+    create_test_case(
+        name='pattern_matching_not_ilike',
+        jsql={
+            'from': 'users',
+            'select': [{'field': 'id'}, {'field': 'name'}],
+            'where': {
+                'op': 'NOT ILIKE',
+                'left': {'field': 'name'},
+                'right': {'value': '%john%'},
+            },
+        },
+        # SQLite doesn't support ILIKE, so SQLGlot converts it to NOT LOWER(...) LIKE LOWER(...)
+        expected_sql="SELECT id, name FROM users WHERE NOT LOWER(name) LIKE LOWER('%john%')",
+        description='Pattern matching: NOT ILIKE operator (case-insensitive NOT LIKE)',
+    ),
+    create_test_case(
+        name='pattern_matching_similar_to',
+        jsql={
+            'from': 'users',
+            'select': [{'field': 'id'}, {'field': 'email'}],
+            'where': {
+                'op': 'SIMILAR TO',
+                'left': {'field': 'email'},
+                'right': {'value': '%@example\\.(com|org)'},
+            },
+        },
+        expected_sql="SELECT id, email FROM users WHERE email SIMILAR TO '%@example\\.(com|org)'",
+        description='Pattern matching: SIMILAR TO operator (SQL regex)',
+    ),
+    create_test_case(
+        name='pattern_matching_regexp',
+        jsql={
+            'from': 'users',
+            'select': [{'field': 'id'}, {'field': 'email'}],
+            'where': {
+                'op': 'REGEXP',
+                'left': {'field': 'email'},
+                'right': {'value': '^[a-z]+@example\\.com$'},
+            },
+        },
+        # SQLite converts REGEXP to REGEXP_LIKE function
+        expected_sql="SELECT id, email FROM users WHERE REGEXP_LIKE(email, '^[a-z]+@example\\.com$')",
+        description='Pattern matching: REGEXP operator (regex matching)',
+    ),
+    create_test_case(
+        name='pattern_matching_rlike',
+        jsql={
+            'from': 'users',
+            'select': [{'field': 'id'}, {'field': 'email'}],
+            'where': {
+                'op': 'RLIKE',
+                'left': {'field': 'email'},
+                'right': {'value': '^[a-z]+@example\\.com$'},
+            },
+        },
+        # SQLite converts RLIKE to REGEXP_LIKE function
+        expected_sql="SELECT id, email FROM users WHERE REGEXP_LIKE(email, '^[a-z]+@example\\.com$')",
+        description='Pattern matching: RLIKE operator (MySQL alias for REGEXP)',
+    ),
 ]
 
 # Membership and Existence Operators
