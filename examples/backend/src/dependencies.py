@@ -16,6 +16,8 @@ class Container(containers.DeclarativeContainer):
     config = providers.Configuration()
 
     # Database engine (async)
+    # Singleton ensures one engine instance per application
+    # Engine is created lazily when first accessed, after database_url is set
     engine = providers.Singleton(
         create_async_engine,
         config.database_url,
@@ -26,6 +28,9 @@ class Container(containers.DeclarativeContainer):
     metadata_provider = providers.Singleton(DefaultMetadataProvider)
 
     # UMA application instance (initialized once at startup)
+    # Cache enabled - queries are compiled WITHOUT literal_binds=True
+    # SQL with parameter placeholders is cached and reused with different parameter values
+    # Cache key depends only on JSQL structure and user context, not parameter values
     uma_app = providers.Singleton(
         lambda engine, provider: UMA.create(
             {
@@ -33,7 +38,8 @@ class Container(containers.DeclarativeContainer):
                     engine=engine,
                     metadata_provider=provider,
                 ),
-            }
+            },
+            # Cache stores SQL with parameter placeholders for parameterized queries
         ),
         engine=engine,
         provider=metadata_provider,

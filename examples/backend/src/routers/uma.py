@@ -3,6 +3,7 @@
 import structlog
 from fastapi import APIRouter
 from fastapi import Depends
+from sqlalchemy import text
 
 from namerec.uma import UMA
 from namerec.uma.jsql.converter import jsql_to_sql
@@ -255,3 +256,53 @@ async def jsql2sql_endpoint(request: JSQL2SQLRequest) -> dict:
 
     logger.info('JSQL to SQL completed')
     return {'sql': sql}
+
+
+@router.get('/test/connection')
+async def test_connection_endpoint(
+    uma: UMA = Depends(get_uma),
+) -> dict:
+    """
+    Test database connection and reflection.
+    
+    Available only in debug mode for security.
+    
+    Returns:
+        Connection test results
+    """
+    from src.config import settings
+    from src.dependencies import container
+    
+    # Only allow in debug mode
+    if not settings.debug_mode:
+        return {'error': 'This endpoint is only available in debug mode'}
+    
+    results = {}
+    
+    try:
+        # Test engine directly
+        engine = container.engine()
+        async with engine.connect() as conn:
+            result = await conn.execute(text('SELECT 1 as test'))
+            value = result.scalar()
+            results['engine_test'] = f'Success: {value}'
+    except Exception as e:
+        results['engine_test'] = f'Error: {e}'
+        if settings.debug_mode:
+            import traceback
+            results['engine_traceback'] = traceback.format_exc()
+    
+    try:
+        # Test UMA select
+        result = await uma.select(
+            jsql={"select": ["id"], "from": "plainter_case", "limit": 1},
+            user_context={"user_id": 1, "role": "admin"}
+        )
+        results['uma_test'] = f'Success: {len(result.get("data", []))} rows'
+    except Exception as e:
+        results['uma_test'] = f'Error: {e}'
+        if settings.debug_mode:
+            import traceback
+            results['uma_traceback'] = traceback.format_exc()
+    
+    return results

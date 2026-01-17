@@ -53,6 +53,9 @@ class JSQLParser:
         self.ctes: dict[str, Select] = {}  # CTEs by name (for SQLAlchemy queries)
         self.alias_manager = AliasManager()  # Manages table/column aliases
         self.select_aliases: dict[str, ColumnElement] = {}  # SELECT column aliases
+        self._param_counter = 0  # Counter for generating unique parameter names
+        # Map JSQL parameter names to bindparam objects for proper parameter mapping
+        self._param_bindparams: dict[str, Any] = {}  # JSQL param name -> bindparam object
 
         # Operator handler dispatch table
         self._condition_handlers: dict[JSQLOperator, Callable] = {
@@ -67,7 +70,7 @@ class JSQLParser:
             JSQLOperator.LIKE: self._handle_like,
         }
 
-    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig]:
+    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig, dict[str, str]]:
         """
         Parse JSQL query into SQLAlchemy Select statement and namespace config.
 
@@ -76,13 +79,18 @@ class JSQLParser:
             params: Query parameters
 
         Returns:
-            Tuple of (SQLAlchemy Select statement, NamespaceConfig)
+            Tuple of (SQLAlchemy Select statement, NamespaceConfig, param_mapping)
+            param_mapping: Dictionary mapping JSQL parameter names to SQL parameter names
 
         Raises:
             JSQLSyntaxError: If JSQL syntax is invalid
             ValueError: If namespace not found or no default available
         """
         self.params = params or {}
+        # Reset parameter counter for each parse to ensure unique parameter names
+        self._param_counter = 0
+        # Reset parameter bindparam mapping for each parse
+        self._param_bindparams = {}
 
         # Parse CTEs if present
         if with_spec := jsql.get(JSQLField.WITH.value):
@@ -97,7 +105,11 @@ class JSQLParser:
         # Get namespace config (already validated in get_namespace_config)
         config = self.get_namespace_config(namespace)
 
-        return query, config
+        # Build parameter mapping: JSQL param name -> SQL param name (bindparam.key)
+        # Since we use key=param_name in bindparam(), the key should match the JSQL param name
+        param_mapping = {jsql_name: bindparam_obj.key for jsql_name, bindparam_obj in self._param_bindparams.items()}
+
+        return query, config, param_mapping
 
     async def _parse_ctes(self, ctes: list[dict[str, Any]]) -> None:
         """
@@ -585,9 +597,9 @@ class JSQLParser:
             raise JSQLSyntaxError(f'{op.value} operator must have "{JSQLField.RIGHT.value}" field')
 
         left = await self._build_expression(condition_spec[JSQLField.LEFT.value])
-        # Extract type from left expression to use for right expression
-        left_type = getattr(left, 'type', None) if hasattr(left, 'type') else None
-        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value], expected_type=left_type)
+        # Don't pass expected_type - let SQLAlchemy infer type from comparison context
+        # This allows simple ISO date strings to work without explicit CAST
+        right = await self._build_expression(condition_spec[JSQLField.RIGHT.value])
 
         # Use match-case for operator dispatch
         match op:
@@ -743,19 +755,29 @@ class JSQLParser:
 
         # Literal value
         if (value := expr_spec.get(JSQLField.VALUE.value)) is not None:
-            if expected_type is not None:
-                # Use cast() for explicit type conversion to avoid VARCHAR casting issues
-                return cast(literal(value), expected_type)
+            # Use plain literal without type annotation
+            # With literal_binds=True, values are embedded directly in SQL as strings
+            # PostgreSQL will automatically handle type conversion when comparing with typed columns
+            # This allows simple ISO date strings like "2025-12-18T00:00:00+00:00" to work
+            # without explicit CAST or type conversion
             return literal(value)
 
-        # Parameter - use walrus operator
+        # Parameter - use bindparam for security (parameterized queries)
         if param_name := expr_spec.get(JSQLField.PARAM.value):
             if param_name not in self.params:
                 raise JSQLSyntaxError(f'Parameter "{param_name}" not provided')
-            # Use cast() for explicit type conversion when expected_type is available
+            # Use bindparam() with explicit key to preserve JSQL parameter name
+            # This ensures SQLAlchemy preserves the parameter name and we can map it correctly
+            # Value will be provided at execution time from self.params
             if expected_type is not None:
-                return cast(literal(self.params[param_name]), expected_type)
-            return literal(self.params[param_name])
+                # Use bindparam with type annotation and explicit key for proper type handling
+                param_bind = bindparam(param_name, value=None, type_=expected_type, key=param_name)
+            else:
+                # Use bindparam with explicit key to preserve parameter name
+                param_bind = bindparam(param_name, value=None, key=param_name)
+            # Store mapping: JSQL param name -> bindparam object for later use in executor
+            self._param_bindparams[param_name] = param_bind
+            return param_bind
 
         # Function call
         if JSQLField.FUNC.value in expr_spec:

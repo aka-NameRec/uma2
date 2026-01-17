@@ -10,25 +10,33 @@ from typing import Any
 def make_cache_key(
     jsql: dict[str, Any],
     user_context: Any = None,
+    params: dict[str, Any] | None = None,  # Deprecated: not used in cache key
 ) -> str:
     """
     Create cache key for JSQL query.
 
     Includes user context hash to handle different permissions per user.
+    Does NOT include parameter values - same JSQL structure uses same cached SQL.
+    Parameter values are passed at execution time, allowing one SQL to be reused.
     Namespace is already in jsql dict (in FROM clause), so no need to pass separately.
 
     Args:
         jsql: JSQL query dictionary (contains namespace in FROM clause)
         user_context: User context (affects permissions/query results)
+        params: Query parameters (deprecated - kept for backward compatibility, not used in cache key)
 
     Returns:
         Cache key (compact hash)
 
     Example:
-        >>> jsql = {"from": "users", "select": ["id", "name"]}
+        >>> jsql = {"from": "users", "select": ["id", "name"], "where": {"op": ">=", "left": {"field": "created"}, "right": {"param": "date"}}}
         >>> key1 = make_cache_key(jsql, {"role": "admin"})
         >>> key2 = make_cache_key(jsql, {"role": "user"})
         >>> key1 != key2  # Different users = different cache keys
+        True
+        >>> key3 = make_cache_key(jsql, None)
+        >>> key4 = make_cache_key(jsql, None)  # Same JSQL structure
+        >>> key3 == key4  # Same cache key - SQL will be reused with different param values
         True
     """
     # Stable JSON representation (includes namespace from FROM clause)
@@ -44,7 +52,12 @@ def make_cache_key(
     else:
         context_str = ""
 
-    # Combine all components
+    # Note: params are NOT included in cache key
+    # Same JSQL structure (with same parameter names) should use same cached SQL
+    # Parameter values are passed at execution time, not at cache key generation time
+    # This allows caching SQL with placeholders and reusing it with different parameter values
+
+    # Combine all components (without params)
     cache_input = f"{jsql_str}|{context_str}"
 
     # Use BLAKE2b for fast, secure hashing (16 bytes = 32 hex chars)
@@ -96,6 +109,7 @@ class CachedQuery:
     params_mapping: dict[str, str]  # JSQL param names -> SQL param names
     dialect: str  # SQL dialect (postgresql, mysql, etc.)
     entities: list[str] = field(default_factory=list)  # Entities in SELECT clause
+    debug_sql: str | None = None  # Formatted SQL for debug output (optional)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for Redis storage."""
@@ -104,6 +118,7 @@ class CachedQuery:
             'params_mapping': self.params_mapping,
             'dialect': self.dialect,
             'entities': self.entities,
+            'debug_sql': self.debug_sql,
         }
 
     @classmethod
@@ -114,4 +129,5 @@ class CachedQuery:
             params_mapping=data['params_mapping'],
             dialect=data['dialect'],
             entities=data.get('entities', []),
+            debug_sql=data.get('debug_sql'),
         )
