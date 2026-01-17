@@ -114,8 +114,8 @@ BASIC_QUERIES = [
             'select': [{'field': 'id'}, {'field': 'name'}],
             'order_by': [{'field': 'name', 'direction': 'DESC'}],
         },
-        expected_sql='SELECT id, name FROM users ORDER BY name',
-        description='SELECT with ORDER BY DESC (sqlglot may not preserve DESC in output)',
+        expected_sql='SELECT id, name FROM users ORDER BY name DESC',
+        description='SELECT with ORDER BY DESC',
     ),
     create_test_case(
         name='select_with_multiple_order_by',

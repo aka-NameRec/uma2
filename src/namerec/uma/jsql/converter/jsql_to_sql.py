@@ -157,9 +157,14 @@ def jsql_query_to_sqlglot(jsql: dict[str, Any]) -> exp.Select:
 
             if order_expr:
                 desc = direction == OrderDirection.DESC.value.upper()
-                # Create Ordered expression directly to preserve DESC
-                ordered_expr = exp.Ordered(this=order_expr, desc=desc)
-                order_exprs.append(ordered_expr)
+                # For DESC, use Ordered expression to preserve DESC
+                # For ASC, use expression directly to avoid "ASC NULLS LAST" in output
+                if desc:
+                    ordered_expr = exp.Ordered(this=order_expr, desc=True)
+                    order_exprs.append(ordered_expr)
+                else:
+                    # ASC - use expression directly (sqlglot will generate "ORDER BY name" without "ASC NULLS LAST")
+                    order_exprs.append(order_expr)
         
         if order_exprs:
             query = query.order_by(*order_exprs)
