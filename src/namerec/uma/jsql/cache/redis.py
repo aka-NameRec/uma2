@@ -1,6 +1,12 @@
 """Redis cache backend for distributed deployments."""
 
+import json
 from typing import Any
+
+try:
+    import redis
+except ImportError:  # pragma: no cover - optional dependency
+    redis = None
 
 from namerec.uma.jsql.cache.keys import CachedQuery
 
@@ -37,11 +43,9 @@ class RedisCacheBackend:
         Raises:
             ImportError: If redis package not installed
         """
-        try:
-            import redis
-        except ImportError as e:
+        if redis is None:
             msg = 'redis package required for RedisCacheBackend. Install with: pip install redis'
-            raise ImportError(msg) from e
+            raise ImportError(msg)
 
         self._redis = redis.from_url(redis_url, decode_responses=True)
         self._prefix = prefix
@@ -53,8 +57,6 @@ class RedisCacheBackend:
 
     def get(self, key: str) -> CachedQuery | None:
         """Get query from Redis."""
-        import json
-
         full_key = f'{self._prefix}{key}'
         data = self._redis.get(full_key)
 
@@ -67,8 +69,6 @@ class RedisCacheBackend:
 
     def set(self, key: str, query: CachedQuery, ttl: int | None = None) -> None:
         """Store query in Redis with TTL."""
-        import json
-
         full_key = f'{self._prefix}{key}'
         ttl = ttl or self._default_ttl
 

@@ -1,5 +1,6 @@
 """JSQL executor - executes parsed JSQL queries."""
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -195,7 +196,6 @@ class JSQLExecutor:
                         # Fallback: if count doesn't match, use old approach (shouldn't happen)
                         # This preserves original behavior if something unexpected occurs
                         # Log warning to detect unexpected cases
-                        import logging
                         logger = logging.getLogger(__name__)
                         logger.warning(
                             f'Parameter count mismatch in SQL replacement: '
