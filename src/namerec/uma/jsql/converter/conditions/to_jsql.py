@@ -28,134 +28,7 @@ from namerec.uma.jsql.converter.conditions.helpers import normalize_between_jsql
 from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
 from namerec.uma.jsql.converter.operators import SQLGLOT_TO_COMPARISON
 
-# Forward imports to avoid circular dependencies
-# These are used in convert_sqlglot_select_to_jsql and convert_condition_to_jsql
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from namerec.uma.jsql.converter.joins import convert_join_to_jsql
-    from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
-
 logger = logging.getLogger(__name__)
-
-
-def convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
-    """
-    Convert SQLGlot Select expression to JSQL query dictionary.
-    
-    This is a helper function primarily used for converting subqueries
-    in EXISTS and NOT EXISTS conditions. It converts a complete SELECT
-    statement to its JSQL representation.
-    
-    Args:
-        select_expr: SQLGlot Select expression object.
-    
-    Returns:
-        JSQL query dictionary containing:
-            - 'from': Table name or specification
-            - 'select': List of selected fields (optional)
-            - 'where': Condition specification (optional)
-            - 'joins': List of join specifications (optional)
-            - 'order_by': List of order specifications (optional)
-            - 'limit': Limit value (optional)
-            - 'offset': Offset value (optional)
-            - 'group_by': List of group by fields (optional)
-            - 'having': Having condition (optional)
-    
-    Example:
-        >>> from sqlglot import parse_one
-        >>> sql = "SELECT id FROM users WHERE age > 18"
-        >>> select_expr = parse_one(sql)
-        >>> jsql = convert_sqlglot_select_to_jsql(select_expr)
-        >>> # Returns: {
-        ... #     "from": "users",
-        ... #     "select": [{"field": "id"}],
-        ... #     "where": {"op": ">", "left": {"field": "age"}, "right": {"value": 18}}
-        ... # }
-    """
-    # Lazy imports to avoid circular dependencies
-    # Note: These imports are deferred because joins.py and sql_to_jsql.py
-    # may import from this module, creating a circular dependency
-    from namerec.uma.jsql.converter.joins import convert_join_to_jsql
-    from namerec.uma.jsql.converter.sql_to_jsql import convert_order_to_jsql
-    from namerec.uma.jsql.constants import JSQLField
-    
-    jsql: dict[str, Any] = {}
-    
-    # FROM clause
-    if from_expr := select_expr.args.get('from_'):
-        if isinstance(from_expr, exp.From):
-            table = from_expr.this
-            if isinstance(table, exp.Table):
-                if table.alias:
-                    jsql['from'] = {
-                        'entity': table.name,
-                        'alias': table.alias,
-                    }
-                else:
-                    jsql['from'] = table.name
-    
-    # SELECT clause
-    if select_expr.expressions:
-        select_fields = []
-        for expr in select_expr.expressions:
-            field_dict = convert_expression_to_jsql(expr)
-            select_fields.append(field_dict)
-        if select_fields:
-            jsql['select'] = select_fields
-    
-    # WHERE clause
-    if select_expr.args.get('where'):
-        where_expr = select_expr.args['where'].this
-        where_jsql = convert_condition_to_jsql(where_expr)
-        jsql['where'] = where_jsql
-    
-    # JOIN clauses
-    if select_expr.args.get('joins'):
-        joins = []
-        for join in select_expr.args['joins']:
-            join_dict = convert_join_to_jsql(join)
-            joins.append(join_dict)
-        if joins:
-            jsql['joins'] = joins
-    
-    # ORDER BY clause
-    if select_expr.args.get('order'):
-        order_by = []
-        for order_expr in select_expr.args['order'].expressions:
-            order_dict = convert_order_to_jsql(order_expr)
-            order_by.append(order_dict)
-        if order_by:
-            jsql['order_by'] = order_by
-    
-    # LIMIT clause
-    if select_expr.args.get('limit'):
-        limit_expr = select_expr.args['limit'].expression
-        if isinstance(limit_expr, exp.Literal):
-            jsql['limit'] = int(limit_expr.this)
-    
-    # OFFSET clause
-    if select_expr.args.get('offset'):
-        offset_expr = select_expr.args['offset'].expression
-        if isinstance(offset_expr, exp.Literal):
-            jsql['offset'] = int(offset_expr.this)
-    
-    # GROUP BY clause
-    if select_expr.args.get('group'):
-        group_by = []
-        for group_expr in select_expr.args['group'].expressions:
-            field_dict = convert_expression_to_jsql(group_expr)
-            group_by.append(field_dict)
-        if group_by:
-            jsql['group_by'] = group_by
-    
-    # HAVING clause
-    if select_expr.args.get('having'):
-        having_expr = select_expr.args['having'].this
-        having_jsql = convert_condition_to_jsql(having_expr)
-        jsql['having'] = having_jsql
-    
-    return jsql
 
 
 # Handler functions for different expression types
@@ -200,6 +73,8 @@ def _convert_not(expr: exp.Not) -> dict[str, Any]:
 
 def _convert_not_in(inner: exp.In) -> dict[str, Any]:
     """Convert NOT(IN(...)) to NOT IN operator."""
+    from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
+    
     left = convert_expression_to_jsql(inner.this)
     
     # Check if IN has a subquery
@@ -276,6 +151,8 @@ def _convert_not_between(inner: exp.Between) -> dict[str, Any]:
 
 def _convert_not_exists(inner: exp.Exists) -> dict[str, Any]:
     """Convert NOT(EXISTS(...)) to NOT EXISTS operator."""
+    from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
+    
     subquery_expr = inner.this
     return {
         'op': JSQLOperator.NOT_EXISTS.value,
@@ -368,6 +245,8 @@ def _convert_regexp_like(expr: exp.RegexpLike) -> dict[str, Any]:
 
 def _convert_exists(expr: exp.Exists) -> dict[str, Any]:
     """Convert EXISTS operator to JSQL."""
+    from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
+    
     subquery_expr = expr.this
     return {
         'op': JSQLOperator.EXISTS.value,
@@ -377,6 +256,8 @@ def _convert_exists(expr: exp.Exists) -> dict[str, Any]:
 
 def _convert_in(expr: exp.In) -> dict[str, Any]:
     """Convert IN operator to JSQL."""
+    from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
+    
     left = convert_expression_to_jsql(expr.this)
 
     # Check if IN has a subquery (stored in args['query'])
@@ -400,6 +281,7 @@ def _convert_in(expr: exp.In) -> dict[str, Any]:
         first_expr = expr.expressions[0]
         if isinstance(first_expr, exp.Subquery):
             # IN with subquery - use left/right format
+            from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
             subquery_jsql = convert_sqlglot_select_to_jsql(first_expr.this)
             return {
                 'op': JSQLOperator.IN.value,

@@ -41,8 +41,8 @@ def jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expressio
         # Check for subquery (full query dictionary)
         if 'from' in expr_spec and 'select' in expr_spec:
             # This looks like a subquery - convert it and wrap in Subquery
-            from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot
-            subquery_select = jsql_query_to_sqlglot(expr_spec)
+            from namerec.uma.jsql.converter.subqueries import jsql_query_to_sqlglot_select
+            subquery_select = jsql_query_to_sqlglot_select(expr_spec)
             return exp.Subquery(this=subquery_select)
 
         # If we get here, the dict doesn't match any known pattern
@@ -237,7 +237,7 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
 
     # Handle subqueries
     if isinstance(expr, exp.Subquery):
-        from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
+        from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
         subquery_jsql = convert_sqlglot_select_to_jsql(expr.this)
         return subquery_jsql
 

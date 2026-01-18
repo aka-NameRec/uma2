@@ -19,156 +19,160 @@ logger = logging.getLogger(__name__)
 
 def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
     """
-    Convert SQL query to JSQL dictionary.
-
-    This function parses SQL using sqlglot and converts it to JSQL format.
-    Currently supports SELECT queries with WHERE, JOIN, ORDER BY, LIMIT, OFFSET.
+    Convert SQL query string to JSQL query dictionary.
 
     Args:
         sql: SQL query string
-        dialect: SQL dialect to parse (generic, postgresql, mysql, sqlite, etc.)
+        dialect: SQL dialect (default: 'generic')
 
     Returns:
         JSQL query dictionary
 
     Raises:
-        JSQLSyntaxError: If SQL cannot be parsed or converted
+        JSQLSyntaxError: If SQL parsing fails or conversion fails
 
     Example:
-        >>> sql = "SELECT id, name FROM users WHERE active = 1 ORDER BY name LIMIT 10"
-        >>> jsql = sql_to_jsql(sql)
-        >>> print(jsql)
-        {
-            'from': 'users',
-            'select': [{'field': 'id'}, {'field': 'name'}],
-            'where': {'op': '=', 'left': {'field': 'active'}, 'right': {'value': 1}},
-            'order_by': [{'field': 'name', 'direction': 'ASC'}],
-            'limit': 10
-        }
+        >>> jsql = sql_to_jsql("SELECT id, name FROM users WHERE active = TRUE")
+        >>> # Returns: {
+        ... #     "from": "users",
+        ... #     "select": [{"field": "id"}, {"field": "name"}],
+        ... #     "where": {"op": "=", "left": {"field": "active"}, "right": {"value": True}}
+        ... # }
     """
     logger.info(f'Converting SQL to JSQL, dialect={dialect}')
-    logger.debug(f'Input SQL: {sql}')
+    logger.debug(f'Input SQL:\n{sql}')
 
     try:
-        # Parse SQL with sqlglot
-        # Use None for generic dialect
-        read_dialect = None if dialect == 'generic' else dialect
-        logger.debug(f"Parsing SQL with dialect: {read_dialect or 'generic'}")
-        parsed = sqlglot.parse_one(sql, read=read_dialect)
-
-        logger.debug(f'Parsed expression type: {type(parsed).__name__}')
-
+        # Parse SQL using sqlglot
+        parsed = sqlglot.parse_one(sql, read=dialect if dialect != 'generic' else None)
         if not isinstance(parsed, exp.Select):
-            logger.warning(f'Unsupported query type: {type(parsed).__name__}')
             raise JSQLSyntaxError(
-                message='Only SELECT queries are supported',
+                message=f'Only SELECT queries are supported, got {type(parsed).__name__}',
                 path='',
             )
 
         # Convert to JSQL
-        jsql: JSQLQuery = {}
-
-        # WITH clause (CTEs) - sqlglot uses 'with_' key
-        if parsed.args.get('with_'):
-            from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
-            ctes = []
-            for cte in parsed.args['with_'].expressions:
-                if isinstance(cte, exp.CTE):
-                    cte_name = cte.alias
-                    cte_query = convert_sqlglot_select_to_jsql(cte.this)
-                    ctes.append({
-                        'name': cte_name,
-                        'query': cte_query,
-                    })
-            if ctes:
-                jsql['with'] = ctes
-
-        # FROM clause
-        if from_expr := parsed.args.get('from_'):
-            if isinstance(from_expr, exp.From):
-                table = from_expr.this
-                if isinstance(table, exp.Table):
-                    if table.alias:
-                        jsql['from'] = {
-                            'entity': table.name,
-                            'alias': table.alias,
-                        }
-                    else:
-                        jsql['from'] = table.name
-
-        # SELECT clause
-        if parsed.expressions:
-            select_fields = []
-            for expr in parsed.expressions:
-                field_dict = convert_expression_to_jsql(expr)
-                select_fields.append(field_dict)
-            if select_fields:
-                jsql['select'] = select_fields
-
-        # WHERE clause
-        if parsed.args.get('where'):
-            where_expr = parsed.args['where'].this
-            where_jsql = convert_condition_to_jsql(where_expr)
-            jsql['where'] = where_jsql
-
-        # JOIN clauses
-        if parsed.args.get('joins'):
-            joins = []
-            for join in parsed.args['joins']:
-                join_dict = convert_join_to_jsql(join)
-                joins.append(join_dict)
-            if joins:
-                jsql['joins'] = joins
-
-        # ORDER BY clause
-        if parsed.args.get('order'):
-            order_by = []
-            for order_expr in parsed.args['order'].expressions:
-                order_dict = convert_order_to_jsql(order_expr)
-                order_by.append(order_dict)
-            if order_by:
-                jsql['order_by'] = order_by
-
-        # LIMIT clause
-        if parsed.args.get('limit'):
-            limit_expr = parsed.args['limit'].expression
-            if isinstance(limit_expr, exp.Literal):
-                jsql['limit'] = int(limit_expr.this)
-
-        # OFFSET clause
-        if parsed.args.get('offset'):
-            offset_expr = parsed.args['offset'].expression
-            if isinstance(offset_expr, exp.Literal):
-                jsql['offset'] = int(offset_expr.this)
-
-        # GROUP BY clause
-        if parsed.args.get('group'):
-            group_by = []
-            for group_expr in parsed.args['group'].expressions:
-                field_dict = convert_expression_to_jsql(group_expr)
-                group_by.append(field_dict)
-            if group_by:
-                jsql['group_by'] = group_by
-
-        # HAVING clause
-        if parsed.args.get('having'):
-            having_expr = parsed.args['having'].this
-            having_jsql = convert_condition_to_jsql(having_expr)
-            jsql['having'] = having_jsql
+        jsql = convert_sqlglot_select_to_jsql(parsed)
 
         logger.info('Successfully converted SQL to JSQL')
         logger.debug(f'Generated JSQL: {jsql}')
         return jsql
 
-    except JSQLSyntaxError as e:
+    except sqlglot.ParseError as e:
         logger.error(f'Failed to parse SQL: {e}', exc_info=True)
-        raise
-    except Exception as e:
-        logger.error(f'Unexpected error during SQL parsing: {e}', exc_info=True)
         raise JSQLSyntaxError(
             message=f'Failed to parse SQL: {e!s}',
             path='',
         ) from e
+    except JSQLSyntaxError:
+        raise
+    except Exception as e:
+        logger.error(f'Unexpected error during SQL conversion: {e}', exc_info=True)
+        raise JSQLSyntaxError(
+            message=f'Failed to convert SQL to JSQL: {e!s}',
+            path='',
+        ) from e
+
+
+def convert_sqlglot_select_to_jsql(parsed: exp.Select) -> dict[str, Any]:
+    """
+    Convert sqlglot Select expression to JSQL query dictionary.
+
+    Args:
+        parsed: SQLGlot Select expression
+
+    Returns:
+        JSQL query dictionary
+    """
+    result: dict[str, Any] = {}
+
+    # WITH clause (CTEs) - sqlglot uses 'with_' key
+    if parsed.args.get('with_'):
+        from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
+        
+        ctes = []
+        for cte in parsed.args['with_'].expressions:
+            if isinstance(cte, exp.CTE):
+                cte_name = cte.alias
+                cte_query = convert_sqlglot_select_to_jsql(cte.this)
+                ctes.append({'name': cte_name, 'query': cte_query})
+        if ctes:
+            result['with'] = ctes
+
+    # FROM clause
+    if from_expr := parsed.args.get('from_'):
+        if isinstance(from_expr, exp.From):
+            table = from_expr.this
+            if isinstance(table, exp.Table):
+                if table.alias:
+                    result['from'] = {
+                        'entity': table.name,
+                        'alias': table.alias,
+                    }
+                else:
+                    result['from'] = table.name
+
+    # SELECT clause
+    if parsed.expressions:
+        select_fields = []
+        for expr in parsed.expressions:
+            field_dict = convert_expression_to_jsql(expr)
+            select_fields.append(field_dict)
+        if select_fields:
+            result['select'] = select_fields
+
+    # WHERE clause
+    if parsed.args.get('where'):
+        where_expr = parsed.args['where'].this
+        where_jsql = convert_condition_to_jsql(where_expr)
+        result['where'] = where_jsql
+
+    # JOIN clauses
+    if parsed.args.get('joins'):
+        joins = []
+        for join in parsed.args['joins']:
+            join_dict = convert_join_to_jsql(join)
+            joins.append(join_dict)
+        if joins:
+            result['joins'] = joins
+
+    # ORDER BY clause
+    if parsed.args.get('order'):
+        order_by = []
+        for order_expr in parsed.args['order'].expressions:
+            order_dict = convert_order_to_jsql(order_expr)
+            order_by.append(order_dict)
+        if order_by:
+            result['order_by'] = order_by
+
+    # LIMIT clause
+    if parsed.args.get('limit'):
+        limit_expr = parsed.args['limit'].expression
+        if isinstance(limit_expr, exp.Literal):
+            result['limit'] = int(limit_expr.this)
+
+    # OFFSET clause
+    if parsed.args.get('offset'):
+        offset_expr = parsed.args['offset'].expression
+        if isinstance(offset_expr, exp.Literal):
+            result['offset'] = int(offset_expr.this)
+
+    # GROUP BY clause
+    if parsed.args.get('group'):
+        group_by = []
+        for group_expr in parsed.args['group'].expressions:
+            field_dict = convert_expression_to_jsql(group_expr)
+            group_by.append(field_dict)
+        if group_by:
+            result['group_by'] = group_by
+
+    # HAVING clause
+    if parsed.args.get('having'):
+        having_expr = parsed.args['having'].this
+        having_jsql = convert_condition_to_jsql(having_expr)
+        result['having'] = having_jsql
+
+    return result
 
 
 def convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:

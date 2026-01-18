@@ -284,11 +284,11 @@ def convert_logical_operator(op: str, cond_spec: dict[str, Any]) -> exp.Expressi
 
 def convert_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     """Convert EXISTS operator to sqlglot expression."""
+    from namerec.uma.jsql.converter.subqueries import jsql_query_to_sqlglot_select
+    
     if 'subquery' not in cond_spec:
         raise MissingFieldError('subquery', path='subquery', context='EXISTS operator')
     subquery_spec = cond_spec['subquery']
-    # Import from jsql_to_sql to avoid circular dependency
-    from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot_select
     subquery = jsql_query_to_sqlglot_select(subquery_spec)
     # In sqlglot, Exists uses 'this' parameter, not 'expression'
     return exp.Exists(this=subquery)
@@ -296,11 +296,11 @@ def convert_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
 
 def convert_not_exists_operator(cond_spec: dict[str, Any]) -> exp.Expression:
     """Convert NOT EXISTS operator to sqlglot expression."""
+    from namerec.uma.jsql.converter.subqueries import jsql_query_to_sqlglot_select
+    
     if 'subquery' not in cond_spec:
         raise MissingFieldError('subquery', path='subquery', context='NOT EXISTS operator')
     subquery_spec = cond_spec['subquery']
-    # Import from jsql_to_sql to avoid circular dependency
-    from namerec.uma.jsql.converter.jsql_to_sql import jsql_query_to_sqlglot_select
     subquery = jsql_query_to_sqlglot_select(subquery_spec)
     # In sqlglot, NotExists uses 'this' parameter, not 'expression'
     return exp.NotExists(this=subquery)

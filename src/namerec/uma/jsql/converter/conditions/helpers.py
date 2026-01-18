@@ -10,6 +10,7 @@ import sqlglot.expressions as exp
 
 from namerec.uma.jsql.conversion_exceptions import InvalidExpressionError
 from namerec.uma.jsql.conversion_exceptions import MissingFieldError
+from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
 from namerec.uma.jsql.converter.expressions import jsql_expression_to_sqlglot
 
 
@@ -263,8 +264,6 @@ def extract_in_operator_values(
         >>> values = extract_in_operator_values(in_expr.expressions, 'IN')
         >>> # Returns: [1, 2, 3]
     """
-    from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
-    
     values: list[Any] = []
     if isinstance(expressions, list):
         for val_expr in expressions:
@@ -303,8 +302,6 @@ def extract_lower_like_pattern(
         >>> result = extract_lower_like_pattern(expr)
         >>> # Returns: ({'field': 'name'}, {'value': '%test%'})
     """
-    from namerec.uma.jsql.converter.expressions import convert_expression_to_jsql
-    
     left_is_lower = isinstance(like_expr.this, exp.Lower)
     right_is_lower = isinstance(like_expr.expression, exp.Lower)
     

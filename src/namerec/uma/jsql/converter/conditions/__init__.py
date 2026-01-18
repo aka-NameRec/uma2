@@ -27,8 +27,8 @@ from namerec.uma.jsql.converter.conditions.helpers import normalize_between_jsql
 from namerec.uma.jsql.converter.conditions.helpers import validate_field_reference
 from namerec.uma.jsql.converter.conditions.helpers import validate_string_operator_operands
 from namerec.uma.jsql.converter.conditions.to_jsql import convert_condition_to_jsql
-from namerec.uma.jsql.converter.conditions.to_jsql import convert_sqlglot_select_to_jsql
 from namerec.uma.jsql.converter.conditions.to_sql import jsql_condition_to_sqlglot
+from namerec.uma.jsql.converter.subqueries import convert_sqlglot_select_to_jsql
 
 __all__ = [
     'jsql_condition_to_sqlglot',
