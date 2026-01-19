@@ -45,10 +45,23 @@ class ComparisonOperatorHandler:
         if JSQLField.RIGHT.value not in condition_spec:
             raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.RIGHT.value}" field')
 
-        left = await self.parser._build_expression(condition_spec[JSQLField.LEFT.value])
-        # Don't pass expected_type - let SQLAlchemy infer type from comparison context
-        # This allows simple ISO date strings to work without explicit CAST
-        right = await self.parser._build_expression(condition_spec[JSQLField.RIGHT.value])
+        left_spec = condition_spec[JSQLField.LEFT.value]
+        right_spec = condition_spec[JSQLField.RIGHT.value]
+
+        left_is_literal = JSQLField.VALUE.value in left_spec or JSQLField.PARAM.value in left_spec
+        right_is_literal = JSQLField.VALUE.value in right_spec or JSQLField.PARAM.value in right_spec
+
+        if JSQLField.FIELD.value in left_spec and right_is_literal:
+            left = await self.parser._build_expression(left_spec)
+            expected_type = getattr(left, 'type', None)
+            right = await self.parser._build_expression(right_spec, expected_type=expected_type)
+        elif JSQLField.FIELD.value in right_spec and left_is_literal:
+            right = await self.parser._build_expression(right_spec)
+            expected_type = getattr(right, 'type', None)
+            left = await self.parser._build_expression(left_spec, expected_type=expected_type)
+        else:
+            left = await self.parser._build_expression(left_spec)
+            right = await self.parser._build_expression(right_spec)
 
         # Use match-case for operator dispatch
         match operator:

@@ -56,6 +56,9 @@ LOG_LEVEL=INFO
 
 # Debug mode (true/false) - adds detailed traceback to error responses
 DEBUG_MODE=false
+
+# CORS allowed origins as JSON array
+CORS_ALLOWED_ORIGINS=["*"]
 ```
 
 ## Running the Application

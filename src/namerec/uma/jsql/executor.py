@@ -109,7 +109,13 @@ class JSQLExecutor:
                 # literal_params may exist even for queries without JSQL parameters
                 if cached.literal_params:
                     sql_params.update(cached.literal_params)
-                return await cls._execute_cached_query(cached.sql, sql_params, config.engine, debug_sql)
+                return await cls._execute_cached_query(
+                    cached.sql,
+                    sql_params,
+                    config.engine,
+                    debug_sql,
+                    cached.param_order,
+                )
 
         # Cache miss - extract entities from AST
         from_entity = jsql.get('from', '')
@@ -147,7 +153,12 @@ class JSQLExecutor:
                 # Convert ? placeholders to named parameters (:param_name) for consistency
                 sql_str = str(compiled)
                 param_order = None
-                literal_params = {}  # Store values for SQLAlchemy-generated params (for security)
+                # Store values for SQLAlchemy-generated params (for security)
+                literal_params = {
+                    name: value
+                    for name, value in compiled.params.items()
+                    if name not in param_mapping.values()
+                }
                 if config.engine.dialect.name == 'sqlite' and hasattr(compiled, 'positiontup') and compiled.positiontup:
                     # Replace ? with named parameters :param_name
                     # positiontup contains SQL param names in order they appear in SQL
@@ -169,9 +180,6 @@ class JSQLExecutor:
                         # SQLAlchemy-generated param (param_1, param_2, etc.) for literals
                         # Store value and use named param to avoid SQL injection
                         elif sql_param_name in compiled.params:
-                            literal_value = compiled.params[sql_param_name]
-                            # Store value for later use with bindparam()
-                            literal_params[sql_param_name] = literal_value
                             # Use named param (will be bound via bindparam() for security)
                             replacements.append(f':{sql_param_name}')
                         else:
@@ -204,10 +212,14 @@ class JSQLExecutor:
                             if jsql_param_name:
                                 sql_str = sql_str.replace('?', f':{jsql_param_name}', 1)
                             elif sql_param_name in compiled.params:
-                                literal_params[sql_param_name] = compiled.params[sql_param_name]
                                 sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
                             else:
                                 sql_str = sql_str.replace('?', f':{sql_param_name}', 1)
+                    # SQL now uses named parameters; positional order is no longer needed.
+                    param_order = None
+                elif hasattr(compiled, 'positiontup') and compiled.positiontup:
+                    # Preserve positional ordering for dialects using numeric placeholders (e.g. asyncpg).
+                    param_order = list(compiled.positiontup)
 
                 # Cache SQL with parameter placeholders
                 # If query has no parameters, SQL will have embedded literal values
@@ -307,13 +319,23 @@ class JSQLExecutor:
         Returns:
             QueryResult with data (metadata may be limited for cached queries)
         """
-        _ = param_order
         conn = await engine.connect()
         try:
-            # Execute cached SQL with named parameter binding
-            # SQL has been converted to use named parameters (:param_name) for all dialects
-            # This works for SQLite (which supports named params) and other databases
-            result = await conn.execute(text(sql), params if params is not None else {})
+            if param_order:
+                bound_params = params or {}
+                missing_params = [name for name in param_order if name not in bound_params]
+                if missing_params:
+                    raise ValueError(
+                        f'Missing cached SQL parameters: {missing_params}. '
+                        f'Available keys: {sorted(bound_params.keys())}'
+                    )
+                positional_params = tuple(bound_params[name] for name in param_order)
+                result = await conn.exec_driver_sql(sql, positional_params)
+            else:
+                # Execute cached SQL with named parameter binding
+                # SQL has been converted to use named parameters (:param_name) for all dialects
+                # This works for SQLite (which supports named params) and other databases
+                result = await conn.execute(text(sql), params if params is not None else {})
             return JSQLExecutor._format_cached_result(result, debug_sql)
         finally:
             await conn.close()

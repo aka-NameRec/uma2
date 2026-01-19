@@ -6,6 +6,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from namerec.uma import JSQLExecutionError
 from namerec.uma import JSQLSyntaxError
@@ -108,6 +109,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS for browser-based clients
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
 # Include routers
 app.include_router(uma.router)
 
@@ -194,13 +204,18 @@ async def health_check() -> dict:
     return {'status': 'ok', 'service': 'uma-backend-demo'}
 
 
-if __name__ == '__main__':
+def run() -> None:
+    """Run development server with default settings."""
     import uvicorn
 
     uvicorn.run(
-        'main:app',
+        'src.main:app',
         host='0.0.0.0',
         port=8000,
         reload=True,
         log_config=None,  # Use our custom logging configuration
     )
+
+
+if __name__ == '__main__':
+    run()

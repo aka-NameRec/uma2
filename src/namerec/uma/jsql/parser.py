@@ -2,6 +2,10 @@
 
 from collections.abc import Callable
 from collections.abc import Mapping
+from datetime import date
+from datetime import datetime
+from datetime import time
+from datetime import timezone
 from typing import Any
 
 from sqlalchemy import Column
@@ -13,6 +17,9 @@ from sqlalchemy import literal
 from sqlalchemy import select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import ClauseElement
+from sqlalchemy.sql.sqltypes import Date
+from sqlalchemy.sql.sqltypes import DateTime
+from sqlalchemy.sql.sqltypes import TIMESTAMP
 
 from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.namespace_config import NamespaceConfig
@@ -704,11 +711,11 @@ class JSQLParser:
 
         # Literal value
         if (value := expr_spec.get(JSQLField.VALUE.value)) is not None:
-            # Use plain literal without type annotation
-            # With literal_binds=True, values are embedded directly in SQL as strings
-            # PostgreSQL will automatically handle type conversion when comparing with typed columns
-            # This allows simple ISO date strings like "2025-12-18T00:00:00+00:00" to work
-            # without explicit CAST or type conversion
+            # Use expected type when provided to avoid dialects binding as VARCHAR
+            # This preserves proper typing for date/time comparisons.
+            if expected_type is not None:
+                coerced_value = self._coerce_literal_value(value, expected_type)
+                return literal(coerced_value, type_=expected_type)
             return literal(value)
 
         # Parameter - use bindparam for security (parameterized queries)
@@ -719,6 +726,8 @@ class JSQLParser:
             # This ensures SQLAlchemy preserves the parameter name and we can map it correctly
             # Value will be provided at execution time from self.params
             if expected_type is not None:
+                coerced_value = self._coerce_literal_value(self.params[param_name], expected_type)
+                self.params[param_name] = coerced_value
                 # Use bindparam with type annotation and explicit key for proper type handling
                 param_bind = bindparam(key=param_name, value=None, type_=expected_type)
             else:
@@ -777,6 +786,49 @@ class JSQLParser:
         # Subquery
         if subquery_spec := expr_spec.get(JSQLField.SUBQUERY.value):
             return await self._build_query(subquery_spec)
+
+        raise JSQLSyntaxError(f'Invalid expression: {expr_spec}')
+
+    def _coerce_literal_value(self, value: Any, expected_type: Any) -> Any:
+        """
+        Coerce literal/parameter values based on expected SQLAlchemy type.
+
+        Raises:
+            JSQLSyntaxError: If value cannot be coerced to expected type
+        """
+        if value is None:
+            return value
+
+        try:
+            if isinstance(expected_type, Date):
+                if isinstance(value, date) and not isinstance(value, datetime):
+                    return value
+                if isinstance(value, datetime):
+                    return value.date()
+                if isinstance(value, str):
+                    return date.fromisoformat(value)
+            if isinstance(expected_type, (DateTime, TIMESTAMP)):
+                if isinstance(value, datetime):
+                    dt_value = value
+                elif isinstance(value, date) and not isinstance(value, datetime):
+                    dt_value = datetime.combine(value, time.min)
+                elif isinstance(value, str):
+                    try:
+                        dt_value = datetime.fromisoformat(value)
+                    except ValueError:
+                        dt_value = datetime.combine(date.fromisoformat(value), time.min)
+                else:
+                    return value
+
+                if getattr(expected_type, 'timezone', False) and dt_value.tzinfo is None:
+                    return dt_value.replace(tzinfo=timezone.utc)
+                return dt_value
+        except (TypeError, ValueError) as exc:
+            raise JSQLSyntaxError(
+                f'Invalid value for expected type {expected_type}: {value}'
+            ) from exc
+
+        return value
 
         raise JSQLSyntaxError(
             f'Invalid expression: must have {JSQLField.FIELD.value}, {JSQLField.VALUE.value}, '

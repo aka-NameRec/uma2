@@ -13,6 +13,9 @@ dependencies = [
     "namerec-uma",
 ]
 
+[project.scripts]
+start = "src.main:run"
+
 [tool.uv.sources]
 namerec-uma = { path = "../..", editable = true }
 
