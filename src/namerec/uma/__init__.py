@@ -30,33 +30,26 @@ from namerec.uma.registry import EntityRegistry
 __version__ = '2.3'
 
 __all__ = [
-    # Main class
     'UMA',
-    # Core types
-    'EntityName',
-    'Operation',
+    'DefaultEntityHandler',
+    'DefaultMetadataProvider',
     'EntityHandler',
+    'EntityName',
+    'EntityRegistry',
+    'JSQLExecutionError',
+    'JSQLSyntaxError',
     'MetadataProvider',
-    'UMAContext',
     'NamespaceConfig',
-    # Exceptions
-    'UMAError',
+    'Operation',
     'UMAAccessDeniedError',
+    'UMAContext',
+    'UMAError',
     'UMANotFoundError',
     'UMANotImplementedError',
     'UMAValidationError',
-    'JSQLSyntaxError',
-    'JSQLExecutionError',
-    # Utils
-    'parse_entity_name',
-    'form_entity_name',
-    'copy_field_meta',
-    'is_virtual_view',
-    # Handlers
-    'DefaultEntityHandler',
     'VirtualViewHandler',
-    # Registry
-    'EntityRegistry',
-    # Metadata
-    'DefaultMetadataProvider',
+    'copy_field_meta',
+    'form_entity_name',
+    'is_virtual_view',
+    'parse_entity_name',
 ]

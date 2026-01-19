@@ -54,7 +54,7 @@ class DatabaseReflector:
                 # This ensures we're in the correct async context for asyncpg
                 engine_url_str = str(engine.url)
                 engine_url_safe = engine_url_str.split('@')[-1] if '@' in engine_url_str else '***'
-                
+
                 # Try to connect and reflect using begin() for proper async context
                 try:
                     # Use begin() to ensure proper async context and transaction handling
@@ -83,7 +83,7 @@ class DatabaseReflector:
             # Re-raise RuntimeError as-is (already formatted)
             raise
         except Exception as e:
-            msg = f'Failed to reflect database schema'
+            msg = 'Failed to reflect database schema'
             if self._schema:
                 msg += f' (schema="{self._schema}")'
             msg += f': {e}'

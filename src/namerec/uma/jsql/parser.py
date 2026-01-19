@@ -1,20 +1,18 @@
 """JSQL parser - converts JSQL (JSON-SQL) to SQLAlchemy queries."""
 
 from collections.abc import Callable
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import Column
 from sqlalchemy import Select
 from sqlalchemy import Table
 from sqlalchemy import bindparam
-from sqlalchemy import cast
 from sqlalchemy import func
 from sqlalchemy import literal
 from sqlalchemy import select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import ClauseElement
-
-from collections.abc import Mapping
 
 from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.namespace_config import NamespaceConfig
@@ -88,7 +86,11 @@ class JSQLParser:
             JSQLOperator.RLIKE: lambda spec: self._string_handler(spec, JSQLOperator.RLIKE, False),
         }
 
-    async def parse(self, jsql: JSQLQuery, params: dict[str, Any] | None = None) -> tuple[Select, NamespaceConfig, dict[str, str]]:
+    async def parse(
+        self,
+        jsql: JSQLQuery,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[Select, NamespaceConfig, dict[str, str]]:
         """
         Parse JSQL query into SQLAlchemy Select statement and namespace config.
 
@@ -157,7 +159,7 @@ class JSQLParser:
             # Register CTE for later use
             cte = cte_query.cte(name=cte_name)
             self.ctes[cte_name] = cte
-            
+
             # Register CTE in AliasManager for column resolution
             self.alias_manager.register_cte(cte_name, cte)
 
@@ -492,25 +494,25 @@ class JSQLParser:
     def _get_table_identifier(self, from_clause: Table | None) -> str | None:
         """
         Extract stable table identifier for cache key.
-        
+
         Uses table name and schema instead of object id() for stable caching
         that works across different queries and parser instances.
-        
+
         Args:
             from_clause: SQLAlchemy Table object or None
-            
+
         Returns:
             Table identifier string (e.g., "schema.table" or "table") or None
         """
         if from_clause is None:
             return None
-        
+
         if isinstance(from_clause, Table):
             table_name = from_clause.name
             if from_clause.schema:
-                return f"{from_clause.schema}.{table_name}"
+                return f'{from_clause.schema}.{table_name}'
             return table_name
-        
+
         # For aliases or other types, use string representation
         # This is less ideal but maintains backward compatibility
         return str(from_clause)
@@ -534,11 +536,11 @@ class JSQLParser:
         # This allows cache to work across different queries for the same table
         table_id = self._get_table_identifier(from_clause)
         cache_key = (field_spec, table_id)
-        
+
         # Check cache first
         if cache_key in self._column_cache:
             return self._column_cache[cache_key]
-        
+
         # Try to resolve through AliasManager first
         try:
             column = self.alias_manager.resolve_column(field_spec, from_clause)
@@ -558,7 +560,7 @@ class JSQLParser:
             else:
                 # Re-raise original error if lazy loading also fails
                 raise
-        
+
         # Cache the result
         self._column_cache[cache_key] = column
         return column

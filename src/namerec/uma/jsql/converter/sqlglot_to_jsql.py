@@ -1,8 +1,8 @@
 """SQLGlot to JSQL conversion helpers and entry points."""
 
 import logging
+from collections.abc import Callable
 from typing import Any
-from typing import Callable
 
 import sqlglot.expressions as exp
 
@@ -19,6 +19,8 @@ from namerec.uma.jsql.types import JSQLExpression
 
 logger = logging.getLogger(__name__)
 
+CONCAT_BINARY_ARITY = 2
+
 
 def extract_in_operator_values(
     expressions: list[exp.Expression],
@@ -26,18 +28,18 @@ def extract_in_operator_values(
 ) -> list[Any]:
     """
     Extract and validate literal values from IN/NOT IN operator expressions.
-    
+
     This helper function centralizes the logic for extracting values from IN/NOT IN
     operator expressions, ensuring all values are literals (not field references or
     subqueries).
-    
+
     Args:
         expressions: List of SQLGlot expressions (from exp.In.expressions)
         operator: Operator name for error messages ('IN' or 'NOT IN')
-        
+
     Returns:
         List of literal values
-        
+
     Raises:
         InvalidExpressionError: If any expression is not a literal value
     """
@@ -52,7 +54,7 @@ def extract_in_operator_values(
                     expression=val,
                 )
             values.append(val['value'])
-    
+
     return values
 
 
@@ -61,24 +63,24 @@ def extract_lower_like_pattern(
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """
     Extract field and pattern from LOWER(...) LIKE LOWER(...) pattern.
-    
+
     SQLite doesn't support ILIKE, so SQLGlot converts ILIKE to LOWER(...) LIKE LOWER(...).
     This function detects this pattern and extracts the inner expressions for conversion
     back to ILIKE.
     """
     left_is_lower = isinstance(like_expr.this, exp.Lower)
     right_is_lower = isinstance(like_expr.expression, exp.Lower)
-    
+
     if not (left_is_lower and right_is_lower):
         return None
-    
+
     # Extract inner expressions from LOWER()
     left_inner = like_expr.this.this
     right_inner = like_expr.expression.this
-    
+
     left = convert_expression_to_jsql(left_inner)
     right = convert_expression_to_jsql(right_inner)
-    
+
     return left, right
 
 
@@ -89,13 +91,13 @@ def normalize_between_jsql_fields(
 ) -> dict[str, Any]:
     """
     Normalize BETWEEN expression components to JSQL format.
-    
+
     This helper function normalizes the expr, low, and high fields for BETWEEN
     and NOT BETWEEN operators. It handles both field references and value literals,
     ensuring consistent JSQL structure.
     """
     result: dict[str, Any] = {}
-    
+
     # Normalize expr field
     if 'field' in expr_jsql:
         result['expr'] = {'field': expr_jsql['field']}
@@ -103,7 +105,7 @@ def normalize_between_jsql_fields(
         result['expr'] = {'value': expr_jsql['value']}
     else:
         result['expr'] = expr_jsql
-    
+
     # Normalize low field
     if 'value' in low_jsql:
         result['low'] = {'value': low_jsql['value']}
@@ -111,7 +113,7 @@ def normalize_between_jsql_fields(
         result['low'] = {'field': low_jsql['field']}
     else:
         result['low'] = low_jsql
-    
+
     # Normalize high field
     if 'value' in high_jsql:
         result['high'] = {'value': high_jsql['value']}
@@ -119,7 +121,7 @@ def normalize_between_jsql_fields(
         result['high'] = {'field': high_jsql['field']}
     else:
         result['high'] = high_jsql
-    
+
     return result
 
 
@@ -127,7 +129,7 @@ def validate_string_operator_operands(
     left: dict[str, Any],
     right: dict[str, Any],
     operator: str,
-    context: str = "",
+    context: str = '',
 ) -> tuple[str, str]:
     """
     Validate operands for string operators (LIKE, ILIKE, SIMILAR_TO, REGEXP, etc.).
@@ -142,7 +144,7 @@ def validate_string_operator_operands(
             path='left',
             expression=left,
         )
-    
+
     # Accept both 'value' and 'pattern' fields (they're semantically equivalent)
     pattern_value = right.get('value') or right.get('pattern')
     if pattern_value is None:
@@ -155,14 +157,14 @@ def validate_string_operator_operands(
             path='right',
             expression=right,
         )
-    
+
     return left['field'], pattern_value
 
 
 def validate_field_reference(
     expr_jsql: dict[str, Any],
     operator: str,
-    side: str = "left",
+    side: str = 'left',
 ) -> str:
     """Validate that expression is a field reference."""
     if 'field' not in expr_jsql:
@@ -177,7 +179,7 @@ def validate_field_reference(
 def _extract_distinct_expression(expr: exp.Distinct) -> tuple[JSQLExpression, bool]:
     """
     Extract expression from DISTINCT wrapper and return (jsql, is_distinct).
-    
+
     This function centralizes DISTINCT handling logic. It handles both 'expressions'
     list and 'this' attributes of exp.Distinct.
     """
@@ -191,19 +193,19 @@ def _extract_distinct_expression(expr: exp.Distinct) -> tuple[JSQLExpression, bo
                 path='',
                 expression={'type': 'Distinct', 'expressions': expr.expressions, 'this': None},
             )
-    
+
     inner_jsql = convert_expression_to_jsql(inner_expr)
-    
+
     if isinstance(inner_jsql, dict):
         inner_jsql['_distinct_marker'] = True
-    
+
     return inner_jsql, True
 
 
 def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
     """
     Convert sqlglot expression to JSQL expression.
-    
+
     Raises:
         InvalidExpressionError: If expression structure is invalid
         UnknownOperatorError: If arithmetic operator is not supported
@@ -235,8 +237,7 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
         return {'field': '*'}
 
     if isinstance(expr, exp.Subquery):
-        subquery_jsql = convert_sqlglot_select_to_jsql(expr.this)
-        return subquery_jsql
+        return convert_sqlglot_select_to_jsql(expr.this)
 
     if isinstance(expr, exp.Window):
         func_expr = expr.this
@@ -247,15 +248,15 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
                 for arg in func_expr.args.values()
                 if isinstance(arg, exp.Expression) and (converted := convert_expression_to_jsql(arg)) is not None
             ]
-            
+
             result: dict[str, Any] = {
                 'func': func_name,
             }
             if args:
                 result['args'] = args
-            
+
             over_spec: dict[str, Any] = {}
-            
+
             if expr.args.get('partition_by'):
                 partition_by = []
                 part_by_arg = expr.args['partition_by']
@@ -269,7 +270,7 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
                         partition_by.append(part_jsql)
                 if partition_by:
                     over_spec['partition_by'] = partition_by
-            
+
             if expr.args.get('order'):
                 order_by = []
                 order_arg = expr.args['order']
@@ -283,10 +284,10 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
                         order_by.append(order_jsql)
                 if order_by:
                     over_spec['order_by'] = order_by
-            
+
             if over_spec:
                 result['over'] = over_spec
-            
+
             return result
 
     if isinstance(expr, exp.Distinct):
@@ -297,7 +298,7 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
         func_name = expr.sql_name()
         args = []
         first_arg_is_distinct = False
-        
+
         for idx, arg in enumerate(expr.args.values()):
             if isinstance(arg, exp.Expression):
                 if isinstance(arg, exp.Distinct):
@@ -319,10 +320,10 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
             'func': func_name,
             'args': args,
         }
-        
+
         if first_arg_is_distinct:
             result['distinct'] = True
-        
+
         return result
 
     if isinstance(expr, exp.Concat):
@@ -332,14 +333,14 @@ def convert_expression_to_jsql(expr: exp.Expression) -> JSQLExpression:
             expressions = [expr.left, expr.right]
         else:
             expressions = getattr(expr, 'expressions', None) or expr.args.get('expressions', [])
-        
-        if len(expressions) == 2:
+
+        if len(expressions) == CONCAT_BINARY_ARITY:
             return {
                 'op': JSQLOperator.CONCAT.value,
                 'left': convert_expression_to_jsql(expressions[0]),
                 'right': convert_expression_to_jsql(expressions[1]),
             }
-        if len(expressions) > 2:
+        if len(expressions) > CONCAT_BINARY_ARITY:
             result = convert_expression_to_jsql(expressions[-1])
             for expr_item in reversed(expressions[:-1]):
                 result = {
@@ -399,7 +400,7 @@ def _convert_not(expr: exp.Not) -> dict[str, Any]:
     not_handler = _NOT_OPERATOR_HANDLERS.get(type(inner))
     if not_handler:
         return not_handler(inner)
-    
+
     return {
         'op': JSQLOperator.NOT.value,
         'condition': convert_condition_to_jsql(expr.this),
@@ -409,7 +410,7 @@ def _convert_not(expr: exp.Not) -> dict[str, Any]:
 def _convert_not_in(inner: exp.In) -> dict[str, Any]:
     """Convert NOT(IN(...)) to NOT IN operator."""
     left = convert_expression_to_jsql(inner.this)
-    
+
     if inner.args.get('query'):
         query_expr = inner.args['query']
         if isinstance(query_expr, exp.Subquery):
@@ -423,7 +424,7 @@ def _convert_not_in(inner: exp.In) -> dict[str, Any]:
                     'left': left,
                     'right': subquery_jsql,
                 }
-    
+
     values = extract_in_operator_values(inner.expressions, 'NOT IN')
     return {
         'op': JSQLOperator.NOT_IN.value,
@@ -435,7 +436,7 @@ def _convert_not_in(inner: exp.In) -> dict[str, Any]:
 def _convert_not_like(inner: exp.Like) -> dict[str, Any]:
     """Convert NOT(LIKE(...)) to NOT LIKE or NOT ILIKE operator."""
     lower_result = extract_lower_like_pattern(inner)
-    
+
     if lower_result:
         left, right = lower_result
         return {
@@ -443,10 +444,10 @@ def _convert_not_like(inner: exp.Like) -> dict[str, Any]:
             'left': left,
             'right': right,
         }
-    
+
     left = convert_expression_to_jsql(inner.this)
     right = convert_expression_to_jsql(inner.expression)
-    
+
     return {
         'op': JSQLOperator.NOT_LIKE.value,
         'left': left,
@@ -458,7 +459,7 @@ def _convert_not_ilike(inner: exp.ILike) -> dict[str, Any]:
     """Convert NOT(ILIKE(...)) to NOT ILIKE operator."""
     left = convert_expression_to_jsql(inner.this)
     right = convert_expression_to_jsql(inner.expression)
-    
+
     return {
         'op': JSQLOperator.NOT_ILIKE.value,
         'left': left,
@@ -471,7 +472,7 @@ def _convert_not_between(inner: exp.Between) -> dict[str, Any]:
     expr_jsql = convert_expression_to_jsql(inner.this)
     low_jsql = convert_expression_to_jsql(inner.args.get('low'))
     high_jsql = convert_expression_to_jsql(inner.args.get('high'))
-    
+
     result = normalize_between_jsql_fields(expr_jsql, low_jsql, high_jsql)
     result['op'] = JSQLOperator.NOT_BETWEEN.value
     return result
@@ -523,7 +524,10 @@ def _convert_comparison(expr: exp.EQ | exp.NEQ | exp.GT | exp.GTE | exp.LT | exp
         and 'op' not in right
     ):
         raise InvalidExpressionError(
-            message='Comparison operator right side must be a value, field reference, function call, expression, or subquery',
+            message=(
+                'Comparison operator right side must be a value, field reference, '
+                'function call, expression, or subquery'
+            ),
             path='right',
             expression=right,
         )
@@ -539,7 +543,7 @@ def _convert_ilike(expr: exp.ILike) -> dict[str, Any]:
     """Convert ILIKE operator to JSQL."""
     left = convert_expression_to_jsql(expr.this)
     right = convert_expression_to_jsql(expr.expression)
-    
+
     return {
         'op': JSQLOperator.ILIKE.value,
         'left': left,
@@ -551,7 +555,7 @@ def _convert_similar_to(expr: exp.SimilarTo) -> dict[str, Any]:
     """Convert SIMILAR TO operator to JSQL."""
     left = convert_expression_to_jsql(expr.this)
     right = convert_expression_to_jsql(expr.expression)
-    
+
     return {
         'op': JSQLOperator.SIMILAR_TO.value,
         'left': left,
@@ -563,7 +567,7 @@ def _convert_regexp_like(expr: exp.RegexpLike) -> dict[str, Any]:
     """Convert REGEXP operator to JSQL."""
     left = convert_expression_to_jsql(expr.this)
     right = convert_expression_to_jsql(expr.expression)
-    
+
     return {
         'op': JSQLOperator.REGEXP.value,
         'left': left,
@@ -621,7 +625,7 @@ def _convert_between(expr: exp.Between) -> dict[str, Any]:
     expr_jsql = convert_expression_to_jsql(expr.this)
     low_jsql = convert_expression_to_jsql(expr.args.get('low'))
     high_jsql = convert_expression_to_jsql(expr.args.get('high'))
-    
+
     result = normalize_between_jsql_fields(expr_jsql, low_jsql, high_jsql)
     result['op'] = JSQLOperator.BETWEEN.value
     return result
@@ -630,7 +634,7 @@ def _convert_between(expr: exp.Between) -> dict[str, Any]:
 def _convert_like(expr: exp.Like) -> dict[str, Any]:
     """Convert LIKE operator to JSQL."""
     lower_result = extract_lower_like_pattern(expr)
-    
+
     if lower_result:
         left, right = lower_result
         return {
@@ -638,10 +642,10 @@ def _convert_like(expr: exp.Like) -> dict[str, Any]:
             'left': left,
             'right': right,
         }
-    
+
     left = convert_expression_to_jsql(expr.this)
     right = convert_expression_to_jsql(expr.expression)
-    
+
     return {
         'op': JSQLOperator.LIKE.value,
         'left': left,
@@ -652,14 +656,14 @@ def _convert_like(expr: exp.Like) -> dict[str, Any]:
 def _convert_is(expr: exp.Is) -> dict[str, Any]:
     """Convert IS (NULL/NOT NULL) operator to JSQL."""
     left = convert_expression_to_jsql(expr.this)
-    
+
     if expr.args.get('expression') and isinstance(expr.args['expression'], exp.Null):
         return {
             'op': JSQLOperator.IS_NULL.value,
             'left': left,
             'right': {'value': None},
         }
-    
+
     if isinstance(expr.args.get('this'), exp.Null):
         return {
             'op': JSQLOperator.IS_NULL.value,
@@ -677,7 +681,7 @@ def _convert_is(expr: exp.Is) -> dict[str, Any]:
 def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
     """
     Convert SQLGlot expression to JSQL condition specification.
-    
+
     Raises:
         UnsupportedOperationError: If expression type is not supported
     """
@@ -725,7 +729,7 @@ def convert_condition_to_jsql(expr: exp.Expression) -> dict[str, Any]:
 def convert_join_to_jsql(join: exp.Join) -> dict[str, Any]:
     """
     Convert sqlglot JOIN to JSQL join.
-    
+
     Raises:
         InvalidExpressionError: If JOIN structure is invalid
     """
@@ -783,7 +787,7 @@ def convert_join_to_jsql(join: exp.Join) -> dict[str, Any]:
 def convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:
     """
     Convert sqlglot ORDER BY expression to JSQL order.
-    
+
     Raises:
         InvalidExpressionError: If ORDER BY structure is invalid
     """
@@ -805,7 +809,7 @@ def convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:
 def convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
     """
     Convert SQLGlot Select expression to JSQL query dictionary.
-    
+
     This helper converts a complete SELECT statement to its JSQL representation,
     including optional WITH, WHERE, JOIN, ORDER BY, LIMIT/OFFSET, GROUP BY, HAVING.
     """
@@ -821,17 +825,16 @@ def convert_sqlglot_select_to_jsql(select_expr: exp.Select) -> dict[str, Any]:
         if ctes:
             result['with'] = ctes
 
-    if from_expr := select_expr.args.get('from_'):
-        if isinstance(from_expr, exp.From):
-            table = from_expr.this
-            if isinstance(table, exp.Table):
-                if table.alias:
-                    result['from'] = {
-                        'entity': table.name,
-                        'alias': table.alias,
-                    }
-                else:
-                    result['from'] = table.name
+    if (from_expr := select_expr.args.get('from_')) and isinstance(from_expr, exp.From):
+        table = from_expr.this
+        if isinstance(table, exp.Table):
+            if table.alias:
+                result['from'] = {
+                    'entity': table.name,
+                    'alias': table.alias,
+                }
+            else:
+                result['from'] = table.name
 
     if select_expr.expressions:
         select_fields = []

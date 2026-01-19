@@ -7,10 +7,10 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 
-from sqlalchemy import Engine
-from sqlalchemy import MetaData
-
 if TYPE_CHECKING:
+    from sqlalchemy import Engine
+    from sqlalchemy import MetaData
+
     from namerec.uma.core.types import MetadataProvider
 
 
@@ -24,7 +24,7 @@ class UMAContext:
     """
 
     engine: Engine
-    metadata_provider: 'MetadataProvider'
+    metadata_provider: MetadataProvider
     namespace: str
     user_context: Any = None  # User-defined context for access control
     cache: Any = None  # Optional cache implementation

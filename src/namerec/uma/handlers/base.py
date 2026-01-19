@@ -204,18 +204,14 @@ class DefaultEntityHandler:
 
             # Foreign keys
             if col.foreign_keys:
-                fk = list(col.foreign_keys)[0]
+                fk = next(iter(col.foreign_keys))
                 col_info['related_to'] = fk.column.table.name
                 col_info['related_key'] = fk.column.name
 
             columns.append(col_info)
 
         # Construct name with namespace
-        if entity_name.namespace:
-            name = str(entity_name)
-        else:
-            # Entity parsed without namespace - use context's namespace
-            name = f'{context.namespace}:{entity_name.entity}'
+        name = str(entity_name) if entity_name.namespace else f'{context.namespace}:{entity_name.entity}'
 
         metadata = {
             'name': name,

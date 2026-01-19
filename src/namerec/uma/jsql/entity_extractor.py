@@ -1,10 +1,9 @@
 """Entity extraction from SQLAlchemy AST."""
 
-from typing import Any
 
+from sqlalchemy import Table
 from sqlalchemy.sql.expression import ColumnElement
 from sqlalchemy.sql.expression import Select
-from sqlalchemy import Table
 
 
 def extract_select_entities_from_ast(select_ast: Select, from_entity: str) -> list[str]:

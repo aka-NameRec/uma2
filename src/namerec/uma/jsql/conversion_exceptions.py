@@ -14,15 +14,13 @@ __all__ = [
 class JSQLConversionError(JSQLSyntaxError):
     """Base class for JSQL conversion errors."""
 
-
-
 class UnknownOperatorError(JSQLConversionError):
     """Raised when an unknown operator is encountered."""
 
-    def __init__(self, operator: str, path: str = '', supported: list[str] | None = None):
+    def __init__(self, operator: str, path: str = '', supported: list[str] | None = None) -> None:
         """
         Initialize UnknownOperatorError.
-        
+
         Args:
             operator: The unknown operator that was encountered
             path: Path to the problematic field in JSQL structure
@@ -41,10 +39,10 @@ class UnknownOperatorError(JSQLConversionError):
 class InvalidExpressionError(JSQLConversionError):
     """Raised when expression structure is invalid."""
 
-    def __init__(self, message: str, path: str = '', expression: dict | None = None):
+    def __init__(self, message: str, path: str = '', expression: dict | None = None) -> None:
         """
         Initialize InvalidExpressionError.
-        
+
         Args:
             message: Description of what makes the expression invalid
             path: Path to the problematic field in JSQL structure
@@ -57,10 +55,10 @@ class InvalidExpressionError(JSQLConversionError):
 class MissingFieldError(JSQLConversionError):
     """Raised when a required field is missing."""
 
-    def __init__(self, field: str, path: str = '', context: str = ''):
+    def __init__(self, field: str, path: str = '', context: str = '') -> None:
         """
         Initialize MissingFieldError.
-        
+
         Args:
             field: Name of the missing required field
             path: Path where the field was expected
@@ -79,10 +77,10 @@ class MissingFieldError(JSQLConversionError):
 class UnsupportedOperationError(JSQLConversionError):
     """Raised when an unsupported operation is requested."""
 
-    def __init__(self, operation: str, reason: str = '', path: str = ''):
+    def __init__(self, operation: str, reason: str = '', path: str = '') -> None:
         """
         Initialize UnsupportedOperationError.
-        
+
         Args:
             operation: The unsupported operation
             reason: Why this operation is not supported

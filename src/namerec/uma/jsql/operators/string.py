@@ -1,26 +1,30 @@
 """String operator handlers (LIKE, ILIKE, SIMILAR_TO, REGEXP, RLIKE)."""
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy.sql.expression import ClauseElement
 
 from namerec.uma.jsql.constants import JSQLField
 from namerec.uma.jsql.constants import JSQLOperator
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
-from namerec.uma.jsql.operators.protocol import OperatorHandler
 from namerec.uma.jsql.types import JSQLExpression
+
+if TYPE_CHECKING:
+    from namerec.uma.jsql.parser import JSQLParser
 
 
 class StringOperatorHandler:
     """Handler for string matching operators."""
-    
+
     def __init__(self, parser: 'JSQLParser') -> None:
         """
         Initialize string operator handler.
-        
+
         Args:
             parser: JSQLParser instance for building expressions
         """
         self.parser = parser
-    
+
     async def __call__(
         self,
         condition_spec: JSQLExpression,
@@ -29,12 +33,12 @@ class StringOperatorHandler:
     ) -> ClauseElement:
         """
         Handle string matching operator.
-        
+
         Args:
             condition_spec: JSQL condition specification
             operator: String operator (LIKE, ILIKE, SIMILAR_TO, REGEXP, RLIKE)
             negate: Whether to negate the result (for NOT operators)
-            
+
         Returns:
             SQLAlchemy clause element
         """

@@ -11,6 +11,6 @@ from namerec.uma.jsql.cache.protocol import CacheBackend
 __all__ = [
     'CacheBackend',
     'CachedQuery',
-    'make_cache_key',
     'MemoryCacheBackend',
+    'make_cache_key',
 ]

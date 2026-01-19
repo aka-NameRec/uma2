@@ -278,7 +278,7 @@ class DefaultMetadataProvider:
             True if access allowed, False otherwise
         """
         # Special case: listing entities
-        if entity_name == '' and (operation == Operation.META or operation == 'meta'):
+        if entity_name == '' and operation in {Operation.META, 'meta'}:
             # Allow listing for everyone by default
             return True
 

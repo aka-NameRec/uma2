@@ -107,5 +107,6 @@ class EntityRegistry:
         Returns:
             List of registered entity names
         """
+        _ = context
         # Only registered custom handlers
         return sorted(self._handlers.keys())

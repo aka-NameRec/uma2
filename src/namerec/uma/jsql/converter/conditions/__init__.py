@@ -31,13 +31,13 @@ from namerec.uma.jsql.converter.conditions.to_sql import jsql_condition_to_sqlgl
 from namerec.uma.jsql.converter.sqlglot_to_jsql import convert_sqlglot_select_to_jsql
 
 __all__ = [
-    'jsql_condition_to_sqlglot',
     'convert_condition_to_jsql',
     'convert_sqlglot_select_to_jsql',
     'extract_in_operator_values',
     'extract_left_expression',
     'extract_lower_like_pattern',
     'extract_pattern',
+    'jsql_condition_to_sqlglot',
     'normalize_between_jsql_fields',
     'validate_field_reference',
     'validate_string_operator_operands',

@@ -62,10 +62,7 @@ def convert(
     """
     try:
         # Read input
-        if input_file:
-            input_text = input_file.read()
-        else:
-            input_text = sys.stdin.read()
+        input_text = input_file.read() if input_file else sys.stdin.read()
 
         input_text = input_text.strip()
 

@@ -5,7 +5,6 @@ import sqlglot.expressions as exp
 from namerec.uma.jsql.constants import JoinType
 from namerec.uma.jsql.constants import JSQLOperator
 
-
 # Operator mappings for JSQL -> SQL conversion
 ARITHMETIC_OP_TO_SQLGLOT: dict[str, type[exp.Expression]] = {
     JSQLOperator.ADD.value: exp.Add,

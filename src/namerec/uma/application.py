@@ -7,7 +7,6 @@ from typing import Any
 
 from namerec.uma.core.access import check_access
 from namerec.uma.core.context import UMAContext
-from namerec.uma.core.exceptions import UMAAccessDeniedError
 from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
@@ -325,6 +324,7 @@ class UMA:
             JSQLSyntaxError: If JSQL syntax is invalid
             JSQLExecutionError: If query execution fails
         """
+        _ = namespace
         result = await JSQLExecutor.execute(
             jsql=jsql,
             params=params,

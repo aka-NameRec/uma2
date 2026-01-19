@@ -29,7 +29,15 @@ def make_cache_key(
         Cache key (compact hash)
 
     Example:
-        >>> jsql = {"from": "users", "select": ["id", "name"], "where": {"op": ">=", "left": {"field": "created"}, "right": {"param": "date"}}}
+        >>> jsql = {
+        ...     "from": "users",
+        ...     "select": ["id", "name"],
+        ...     "where": {
+        ...         "op": ">=",
+        ...         "left": {"field": "created"},
+        ...         "right": {"param": "date"},
+        ...     },
+        ... }
         >>> key1 = make_cache_key(jsql, {"role": "admin"})
         >>> key2 = make_cache_key(jsql, {"role": "user"})
         >>> key1 != key2  # Different users = different cache keys
@@ -39,6 +47,7 @@ def make_cache_key(
         >>> key3 == key4  # Same cache key - SQL will be reused with different param values
         True
     """
+    _ = params
     # Stable JSON representation (includes namespace from FROM clause)
     jsql_str = json.dumps(jsql, sort_keys=True, ensure_ascii=False)
 
@@ -50,7 +59,7 @@ def make_cache_key(
             ensure_ascii=False,
         )
     else:
-        context_str = ""
+        context_str = ''
 
     # Note: params are NOT included in cache key
     # Same JSQL structure (with same parameter names) should use same cached SQL
@@ -58,7 +67,7 @@ def make_cache_key(
     # This allows caching SQL with placeholders and reusing it with different parameter values
 
     # Combine all components (without params)
-    cache_input = f"{jsql_str}|{context_str}"
+    cache_input = f'{jsql_str}|{context_str}'
 
     # Use BLAKE2b for fast, secure hashing (16 bytes = 32 hex chars)
     return hashlib.blake2b(cache_input.encode(), digest_size=16).hexdigest()
