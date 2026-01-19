@@ -252,7 +252,7 @@ class JSQLExecutor:
             except Exception as e:  # noqa: BLE001
                 # Log compilation errors but don't fail the query
                 if structlog:
-                    struct_logger = cast(Any, structlog.get_logger())
+                    struct_logger = cast('Any', structlog.get_logger())
                     struct_logger.warning(
                         'Failed to cache query',
                         cache_key=cache_key,

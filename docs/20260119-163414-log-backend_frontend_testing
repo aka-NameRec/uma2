@@ -1,0 +1,27 @@
+Backend/Frontend Testing Log (2026-01-19)
+
+Scope
+- Backend startup ergonomics (uv run start, env loading), CORS handling, and API path fixes.
+- JSQL execution fixes for parameter typing, cache behavior, and metadata consistency.
+- SQL -> JSQL conversion diagnostics and performance logging.
+- Linting/type-checking cleanup for touched modules.
+
+Key changes in this branch
+- Added backend start script and uvicorn entry point, fixed ASGI import path.
+- Aligned .env loading with backend folder and documented CORS configuration; added CORS middleware.
+- Hardened JSQL cached execution to preserve parameter binding safety and consistent typing on cache hit.
+- Added parse/convert timing logs for SQL -> JSQL conversion and reduced log overhead on parse errors.
+- Cached query metadata now persists across cache hits (meta is no longer empty on repeated requests).
+- Updated FastAPI handlers and JSQL modules for ruff/mypy compliance.
+
+Operational notes
+- Existing cache entries without metadata require a cache clear or backend restart to see meta on cache hits.
+- SQL -> JSQL rejects unsupported SQL constructs quickly; parse timing now makes slow inputs visible.
+
+Tests and tooling
+- pytest: 188 passed.
+- ruff check: clean on modified files.
+- mypy: clean on modified files.
+
+Artifacts
+- Commits in branch include fixes for cached metadata, SQL -> JSQL logging, and typing cleanup.

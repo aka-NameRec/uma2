@@ -1,6 +1,6 @@
 [project]
 name = "namerec-uma"
-version = "0.7"
+version = "0.8"
 release_date = "2026-01-19"
 description = "Unified Model Access - A Python package for unified database access via JSON-SQL queries"
 readme = "README.md"

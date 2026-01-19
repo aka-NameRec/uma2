@@ -125,9 +125,9 @@ app.include_router(uma.router)
 # Exception handlers
 @app.exception_handler(UMAAccessDeniedError)  # type: ignore[misc]
 async def uma_access_denied_handler(
-    request: Request,
+    _request: Request,
     exc: UMAAccessDeniedError,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle UMA access denied errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.warning(
@@ -140,9 +140,9 @@ async def uma_access_denied_handler(
 
 @app.exception_handler(UMANotFoundError)  # type: ignore[misc]
 async def uma_not_found_handler(
-    request: Request,
+    _request: Request,
     exc: UMANotFoundError,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle UMA not found errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.warning(
@@ -154,9 +154,9 @@ async def uma_not_found_handler(
 
 @app.exception_handler(JSQLSyntaxError)  # type: ignore[misc]
 async def jsql_syntax_handler(
-    request: Request,
+    _request: Request,
     exc: JSQLSyntaxError,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle JSQL syntax errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error(
@@ -169,9 +169,9 @@ async def jsql_syntax_handler(
 
 @app.exception_handler(JSQLExecutionError)  # type: ignore[misc]
 async def jsql_execution_handler(
-    request: Request,
+    _request: Request,
     exc: JSQLExecutionError,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle JSQL execution errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error(
@@ -183,9 +183,9 @@ async def jsql_execution_handler(
 
 @app.exception_handler(UMAValidationError)  # type: ignore[misc]
 async def uma_validation_handler(
-    request: Request,
+    _request: Request,
     exc: UMAValidationError,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle UMA validation errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error(
@@ -198,9 +198,9 @@ async def uma_validation_handler(
 
 @app.exception_handler(UMAError)  # type: ignore[misc]
 async def uma_error_handler(
-    request: Request,
+    _request: Request,
     exc: UMAError,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle generic UMA errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error('UMA error', message=str(exc))
@@ -209,9 +209,9 @@ async def uma_error_handler(
 
 @app.exception_handler(Exception)  # type: ignore[misc]
 async def generic_exception_handler(
-    request: Request,
+    _request: Request,
     exc: Exception,
-) -> JSONResponse:  # noqa: ARG001
+) -> JSONResponse:
     """Handle unexpected exceptions."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.exception('Unexpected error', exc_info=exc)

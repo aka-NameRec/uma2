@@ -342,11 +342,11 @@ class JSQLParser:
                 return default_ns
             raise ValueError("JSQL must contain 'from' field")
 
-        entity = cast(EntityName, parse_entity_name(from_entity if isinstance(from_entity, str) else ''))
+        entity = cast('EntityName', parse_entity_name(from_entity if isinstance(from_entity, str) else ''))
 
         # Use entity namespace or default
         if entity.namespace:
-            return cast(str, entity.namespace)
+            return cast('str', entity.namespace)
 
         default_ns = self._get_default_namespace()
         if default_ns:

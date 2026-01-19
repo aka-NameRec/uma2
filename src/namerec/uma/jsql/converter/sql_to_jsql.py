@@ -100,11 +100,11 @@ def convert_sqlglot_select_to_jsql(parsed: exp.Select) -> dict[str, Any]:
     Returns:
         JSQL query dictionary
     """
-    return cast(dict[str, Any], _convert_sqlglot_select_to_jsql(parsed))
+    return cast('dict[str, Any]', _convert_sqlglot_select_to_jsql(parsed))
 
 
 def convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:
     """
     Convert sqlglot ORDER BY expression to JSQL order.
     """
-    return cast(dict[str, Any], _convert_order_to_jsql(order_expr))
+    return cast('dict[str, Any]', _convert_order_to_jsql(order_expr))
