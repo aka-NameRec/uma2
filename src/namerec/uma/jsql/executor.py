@@ -18,6 +18,9 @@ from sqlalchemy import Engine
 from sqlalchemy import text
 from sqlalchemy.engine import Compiled
 from sqlalchemy.sql.expression import Select
+from sqlalchemy.sql.sqltypes import Date
+from sqlalchemy.sql.sqltypes import DateTime
+from sqlalchemy.sql.sqltypes import TIMESTAMP
 
 from namerec.uma.core.access import check_access
 from namerec.uma.core.namespace_config import NamespaceConfig
@@ -103,7 +106,13 @@ class JSQLExecutor:
                     for jsql_param_name, _sql_param_name in cached.params_mapping.items():
                         if jsql_param_name in params:
                             # Use JSQL param name in SQL (we replaced ? with :jsql_param_name during caching)
-                            sql_params[jsql_param_name] = params[jsql_param_name]
+                            param_value = params[jsql_param_name]
+                            if cached.param_types and jsql_param_name in cached.param_types:
+                                param_value = cls._coerce_cached_param(
+                                    param_value,
+                                    cached.param_types[jsql_param_name],
+                                )
+                            sql_params[jsql_param_name] = param_value
                 # Add literal parameters (SQLAlchemy-generated params for literals)
                 # These are safe because values come from compiled.params, not user input
                 # literal_params may exist even for queries without JSQL parameters
@@ -224,6 +233,7 @@ class JSQLExecutor:
                 # Cache SQL with parameter placeholders
                 # If query has no parameters, SQL will have embedded literal values
                 # If query has parameters, SQL will have named placeholders (:param_name)
+                param_types = cls._extract_param_types(compiled, param_mapping)
                 cached_query = CachedQuery(
                     sql=sql_str,  # SQL with named parameters (:param_name) instead of ?
                     params_mapping=param_mapping,  # Map JSQL param names to SQL param names (bindparam keys)
@@ -231,6 +241,7 @@ class JSQLExecutor:
                     param_order=param_order,  # Parameter order (for reference, not used for execution)
                     dialect=config.engine.dialect.name,
                     entities=select_entities,
+                    param_types=param_types,
                     debug_sql=debug_sql,  # Cache debug SQL to avoid recompilation
                 )
                 cache_backend.set(cache_key, cached_query)
@@ -339,6 +350,48 @@ class JSQLExecutor:
             return JSQLExecutor._format_cached_result(result, debug_sql)
         finally:
             await conn.close()
+
+    @staticmethod
+    def _extract_param_types(compiled: Compiled, param_mapping: dict[str, str]) -> dict[str, str]:
+        """
+        Extract JSQL parameter types from compiled SQLAlchemy binds.
+
+        Returns:
+            Mapping of JSQL param name -> serialized type key
+        """
+        param_types: dict[str, str] = {}
+        for jsql_name, sql_name in param_mapping.items():
+            bindparam = compiled.binds.get(sql_name)
+            if bindparam is None:
+                continue
+            type_key = JSQLExecutor._serialize_param_type(bindparam.type)
+            if type_key:
+                param_types[jsql_name] = type_key
+        return param_types
+
+    @staticmethod
+    def _serialize_param_type(type_: Any) -> str | None:
+        """Serialize SQLAlchemy types to JSON-friendly keys."""
+        if isinstance(type_, Date):
+            return 'date'
+        if isinstance(type_, (DateTime, TIMESTAMP)):
+            if getattr(type_, 'timezone', False):
+                return 'timestamptz'
+            return 'datetime'
+        return None
+
+    @staticmethod
+    def _coerce_cached_param(value: Any, type_key: str) -> Any:
+        """Coerce cached parameter values based on serialized type key."""
+        if type_key == 'date':
+            expected_type: Any = Date()
+        elif type_key == 'datetime':
+            expected_type = DateTime()
+        elif type_key == 'timestamptz':
+            expected_type = TIMESTAMP(timezone=True)
+        else:
+            return value
+        return JSQLParser._coerce_literal_value(value, expected_type)
 
     @staticmethod
     def _format_cached_result(result: Any, debug_sql: str | None = None) -> QueryResult:

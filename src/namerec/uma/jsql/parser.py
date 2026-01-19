@@ -789,7 +789,8 @@ class JSQLParser:
 
         raise JSQLSyntaxError(f'Invalid expression: {expr_spec}')
 
-    def _coerce_literal_value(self, value: Any, expected_type: Any) -> Any:
+    @staticmethod
+    def _coerce_literal_value(value: Any, expected_type: Any) -> Any:
         """
         Coerce literal/parameter values based on expected SQLAlchemy type.
 
@@ -829,11 +830,6 @@ class JSQLParser:
             ) from exc
 
         return value
-
-        raise JSQLSyntaxError(
-            f'Invalid expression: must have {JSQLField.FIELD.value}, {JSQLField.VALUE.value}, '
-            f'{JSQLField.PARAM.value}, {JSQLField.FUNC.value}, or {JSQLField.OP.value}'
-        )
 
     async def _build_function(self, func_spec: dict[str, Any], path: str = '') -> ColumnElement:
         """

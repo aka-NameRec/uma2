@@ -1,6 +1,7 @@
 """SQL to JSQL conversion."""
 
 import logging
+from time import perf_counter
 from typing import Any
 
 import sqlglot
@@ -38,10 +39,15 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
     """
     logger.info(f'Converting SQL to JSQL, dialect={dialect}')
     logger.debug(f'Input SQL:\n{sql}')
+    started_at = perf_counter()
+    parse_ms: float | None = None
+    convert_ms: float | None = None
 
     try:
         # Parse SQL using sqlglot
+        parse_start = perf_counter()
         parsed = sqlglot.parse_one(sql, read=dialect if dialect != 'generic' else None)
+        parse_ms = (perf_counter() - parse_start) * 1000
         if not isinstance(parsed, exp.Select):
             raise JSQLSyntaxError(
                 message=f'Only SELECT queries are supported, got {type(parsed).__name__}',
@@ -49,14 +55,16 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             )
 
         # Convert to JSQL
+        convert_start = perf_counter()
         jsql = _convert_sqlglot_select_to_jsql(parsed)
+        convert_ms = (perf_counter() - convert_start) * 1000
 
         logger.info('Successfully converted SQL to JSQL')
         logger.debug(f'Generated JSQL: {jsql}')
         return jsql
 
     except sqlglot.ParseError as e:
-        logger.error(f'Failed to parse SQL: {e}', exc_info=True)
+        logger.error(f'Failed to parse SQL: {e}')
         raise JSQLSyntaxError(
             message=f'Failed to parse SQL: {e!s}',
             path='',
@@ -69,6 +77,16 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
             message=f'Failed to convert SQL to JSQL: {e!s}',
             path='',
         ) from e
+    finally:
+        total_ms = (perf_counter() - started_at) * 1000
+        parse_label = f'{parse_ms:.2f}ms' if parse_ms is not None else 'n/a'
+        convert_label = f'{convert_ms:.2f}ms' if convert_ms is not None else 'n/a'
+        logger.info(
+            'SQL to JSQL timing: total=%0.2fms parse=%s convert=%s',
+            total_ms,
+            parse_label,
+            convert_label,
+        )
 
 
 def convert_sqlglot_select_to_jsql(parsed: exp.Select) -> dict[str, Any]:

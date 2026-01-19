@@ -120,6 +120,7 @@ class CachedQuery:
     literal_params: dict[str, Any] = field(default_factory=dict)  # SQLAlchemy-generated param names -> literal values
     entities: list[str] = field(default_factory=list)  # Entities in SELECT clause
     param_order: list[str] | None = None  # Parameter order for positional params (SQLite uses ?)
+    param_types: dict[str, str] = field(default_factory=dict)  # JSQL param name -> type key
     debug_sql: str | None = None  # Formatted SQL for debug output (optional)
 
     def to_dict(self) -> dict[str, Any]:
@@ -131,6 +132,7 @@ class CachedQuery:
             'param_order': self.param_order,
             'dialect': self.dialect,
             'entities': self.entities,
+            'param_types': self.param_types,
             'debug_sql': self.debug_sql,
         }
 
@@ -144,5 +146,6 @@ class CachedQuery:
             param_order=data.get('param_order'),
             dialect=data['dialect'],
             entities=data.get('entities', []),
+            param_types=data.get('param_types', {}),
             debug_sql=data.get('debug_sql'),
         )
