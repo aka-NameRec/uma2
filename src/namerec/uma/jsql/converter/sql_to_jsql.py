@@ -3,6 +3,7 @@
 import logging
 from time import perf_counter
 from typing import Any
+from typing import cast
 
 import sqlglot
 import sqlglot.expressions as exp
@@ -99,11 +100,11 @@ def convert_sqlglot_select_to_jsql(parsed: exp.Select) -> dict[str, Any]:
     Returns:
         JSQL query dictionary
     """
-    return _convert_sqlglot_select_to_jsql(parsed)
+    return cast(dict[str, Any], _convert_sqlglot_select_to_jsql(parsed))
 
 
 def convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:
     """
     Convert sqlglot ORDER BY expression to JSQL order.
     """
-    return _convert_order_to_jsql(order_expr)
+    return cast(dict[str, Any], _convert_order_to_jsql(order_expr))

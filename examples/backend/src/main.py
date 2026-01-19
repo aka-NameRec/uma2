@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -29,7 +30,7 @@ logger = structlog.get_logger()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ARG001
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001
     """
     Manage application lifecycle.
 
@@ -122,8 +123,11 @@ app.include_router(uma.router)
 
 
 # Exception handlers
-@app.exception_handler(UMAAccessDeniedError)
-async def uma_access_denied_handler(request: Request, exc: UMAAccessDeniedError):  # noqa: ARG001
+@app.exception_handler(UMAAccessDeniedError)  # type: ignore[misc]
+async def uma_access_denied_handler(
+    request: Request,
+    exc: UMAAccessDeniedError,
+) -> JSONResponse:  # noqa: ARG001
     """Handle UMA access denied errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.warning(
@@ -134,8 +138,11 @@ async def uma_access_denied_handler(request: Request, exc: UMAAccessDeniedError)
     return JSONResponse(status_code=status_code, content=error.model_dump())
 
 
-@app.exception_handler(UMANotFoundError)
-async def uma_not_found_handler(request: Request, exc: UMANotFoundError):  # noqa: ARG001
+@app.exception_handler(UMANotFoundError)  # type: ignore[misc]
+async def uma_not_found_handler(
+    request: Request,
+    exc: UMANotFoundError,
+) -> JSONResponse:  # noqa: ARG001
     """Handle UMA not found errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.warning(
@@ -145,8 +152,11 @@ async def uma_not_found_handler(request: Request, exc: UMANotFoundError):  # noq
     return JSONResponse(status_code=status_code, content=error.model_dump())
 
 
-@app.exception_handler(JSQLSyntaxError)
-async def jsql_syntax_handler(request: Request, exc: JSQLSyntaxError):  # noqa: ARG001
+@app.exception_handler(JSQLSyntaxError)  # type: ignore[misc]
+async def jsql_syntax_handler(
+    request: Request,
+    exc: JSQLSyntaxError,
+) -> JSONResponse:  # noqa: ARG001
     """Handle JSQL syntax errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error(
@@ -157,8 +167,11 @@ async def jsql_syntax_handler(request: Request, exc: JSQLSyntaxError):  # noqa: 
     return JSONResponse(status_code=status_code, content=error.model_dump())
 
 
-@app.exception_handler(JSQLExecutionError)
-async def jsql_execution_handler(request: Request, exc: JSQLExecutionError):  # noqa: ARG001
+@app.exception_handler(JSQLExecutionError)  # type: ignore[misc]
+async def jsql_execution_handler(
+    request: Request,
+    exc: JSQLExecutionError,
+) -> JSONResponse:  # noqa: ARG001
     """Handle JSQL execution errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error(
@@ -168,8 +181,11 @@ async def jsql_execution_handler(request: Request, exc: JSQLExecutionError):  # 
     return JSONResponse(status_code=status_code, content=error.model_dump())
 
 
-@app.exception_handler(UMAValidationError)
-async def uma_validation_handler(request: Request, exc: UMAValidationError):  # noqa: ARG001
+@app.exception_handler(UMAValidationError)  # type: ignore[misc]
+async def uma_validation_handler(
+    request: Request,
+    exc: UMAValidationError,
+) -> JSONResponse:  # noqa: ARG001
     """Handle UMA validation errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error(
@@ -180,16 +196,22 @@ async def uma_validation_handler(request: Request, exc: UMAValidationError):  # 
     return JSONResponse(status_code=status_code, content=error.model_dump())
 
 
-@app.exception_handler(UMAError)
-async def uma_error_handler(request: Request, exc: UMAError):  # noqa: ARG001
+@app.exception_handler(UMAError)  # type: ignore[misc]
+async def uma_error_handler(
+    request: Request,
+    exc: UMAError,
+) -> JSONResponse:  # noqa: ARG001
     """Handle generic UMA errors."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.error('UMA error', message=str(exc))
     return JSONResponse(status_code=status_code, content=error.model_dump())
 
 
-@app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):  # noqa: ARG001
+@app.exception_handler(Exception)  # type: ignore[misc]
+async def generic_exception_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:  # noqa: ARG001
     """Handle unexpected exceptions."""
     error, status_code = handle_uma_exception(exc, settings.debug_mode)
     logger.exception('Unexpected error', exc_info=exc)
@@ -197,8 +219,8 @@ async def generic_exception_handler(request: Request, exc: Exception):  # noqa: 
 
 
 # Health check endpoint
-@app.get('/health')
-async def health_check() -> dict:
+@app.get('/health')  # type: ignore[misc]
+async def health_check() -> dict[str, str]:
     """Health check endpoint."""
     return {'status': 'ok', 'service': 'uma-backend-demo'}
 

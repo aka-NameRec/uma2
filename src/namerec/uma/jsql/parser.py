@@ -1,12 +1,14 @@
 """JSQL parser - converts JSQL (JSON-SQL) to SQLAlchemy queries."""
-# ruff: noqa: B904, C901, PLR0911, PLR0912, TRY003
+# ruff: noqa: B904, C901, PLR0911, PLR0912, TRY003, UP017
 
 from collections.abc import Callable
 from collections.abc import Mapping
 from datetime import date
 from datetime import datetime
 from datetime import time
+from datetime import timezone
 from typing import Any
+from typing import cast
 
 from sqlalchemy import Column
 from sqlalchemy import Select
@@ -40,6 +42,8 @@ from namerec.uma.jsql.operators.string import StringOperatorHandler
 from namerec.uma.jsql.types import JSQLExpression
 from namerec.uma.jsql.types import JSQLQuery
 
+ConditionHandler = Callable[[JSQLExpression], Any]
+
 
 class JSQLParser:
     """
@@ -72,7 +76,7 @@ class JSQLParser:
         self._special_handler = SpecialOperatorHandler(self)
 
         # Operator handler dispatch table
-        self._condition_handlers: dict[JSQLOperator, Callable] = {
+        self._condition_handlers: dict[JSQLOperator, ConditionHandler] = {
             JSQLOperator.AND: lambda spec: self._logical_handler(spec, JSQLOperator.AND),
             JSQLOperator.OR: lambda spec: self._logical_handler(spec, JSQLOperator.OR),
             JSQLOperator.NOT: lambda spec: self._logical_handler(spec, JSQLOperator.NOT),
@@ -243,7 +247,7 @@ class JSQLParser:
         # Delegate to AliasManager
         self.alias_manager.register_table(alias_name, table, *additional_aliases)
 
-    async def _build_from(self, from_spec: str) -> Any:
+    async def _build_from(self, from_spec: Any) -> Any:
         """
         Build FROM clause.
 
@@ -313,7 +317,7 @@ class JSQLParser:
             return next(iter(self.namespace_configs.keys()))
         return None
 
-    def _determine_namespace_from_parsed_query(self, jsql: dict) -> str:
+    def _determine_namespace_from_parsed_query(self, jsql: dict[str, Any]) -> str:
         """
         Determine namespace from parsed query.
 
@@ -338,11 +342,11 @@ class JSQLParser:
                 return default_ns
             raise ValueError("JSQL must contain 'from' field")
 
-        entity = parse_entity_name(from_entity if isinstance(from_entity, str) else '')
+        entity = cast(EntityName, parse_entity_name(from_entity if isinstance(from_entity, str) else ''))
 
         # Use entity namespace or default
         if entity.namespace:
-            return entity.namespace
+            return cast(str, entity.namespace)
 
         default_ns = self._get_default_namespace()
         if default_ns:
@@ -421,7 +425,7 @@ class JSQLParser:
             return labeled_expr
         return expression
 
-    async def _build_select(self, select_spec: list[str | dict[str, Any]], from_clause: Any) -> list[ColumnElement]:
+    async def _build_select(self, select_spec: list[Any], from_clause: Any) -> list[ColumnElement]:
         """
         Build SELECT clause items.
 
@@ -515,7 +519,7 @@ class JSQLParser:
             return None
 
         if isinstance(from_clause, Table):
-            table_name = from_clause.name
+            table_name = str(from_clause.name)
             if from_clause.schema:
                 return f'{from_clause.schema}.{table_name}'
             return table_name
@@ -822,7 +826,7 @@ class JSQLParser:
                     return value
 
                 if getattr(expected_type, 'timezone', False) and dt_value.tzinfo is None:
-                    return dt_value.replace(tzinfo=datetime.UTC)
+                    return dt_value.replace(tzinfo=timezone.utc)
                 return dt_value
         except (TypeError, ValueError) as exc:
             raise JSQLSyntaxError(
@@ -859,8 +863,9 @@ class JSQLParser:
             else:
                 args.append(literal(arg))
 
-        # Get SQLAlchemy function - use walrus operator
-        if (sql_func := getattr(func, func_name.lower(), None)) is None:
+        # Get SQLAlchemy function
+        sql_func = getattr(func, func_name.lower(), None)
+        if not callable(sql_func):
             raise JSQLSyntaxError(f'Unknown function: {func_name}', path)
 
         # Handle DISTINCT
@@ -898,8 +903,9 @@ class JSQLParser:
             else:
                 args.append(literal(arg))
 
-        # Get SQLAlchemy function - use walrus operator
-        if (sql_func := getattr(func, func_name.lower(), None)) is None:
+        # Get SQLAlchemy function
+        sql_func = getattr(func, func_name.lower(), None)
+        if not callable(sql_func):
             raise JSQLSyntaxError(f'Unknown function: {func_name}', path)
 
         # Build function call
@@ -925,7 +931,7 @@ class JSQLParser:
         # Apply OVER
         return func_call.over(partition_by=partition_by, order_by=order_by)
 
-    async def _build_group_by(self, group_by_spec: list[dict[str, Any] | str]) -> list[ColumnElement]:
+    async def _build_group_by(self, group_by_spec: list[Any]) -> list[ColumnElement]:
         """
         Build GROUP BY clause.
 
@@ -969,7 +975,7 @@ class JSQLParser:
         # Otherwise resolve as column
         return await self._resolve_column(field_name, None)
 
-    async def _build_order_by(self, order_by_spec: list[dict[str, Any] | str]) -> list[ColumnElement]:
+    async def _build_order_by(self, order_by_spec: list[Any]) -> list[ColumnElement]:
         """
         Build ORDER BY clause.
 

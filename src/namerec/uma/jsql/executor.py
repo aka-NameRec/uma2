@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Mapping
 from typing import Any
+from typing import cast
 
 try:
     import sqlparse
@@ -41,11 +42,11 @@ class JSQLExecutor:
     @classmethod
     async def execute(  # noqa: C901, PLR0912, PLR0915
         cls,
-        jsql: dict,
+        jsql: dict[str, Any],
         namespace_configs: Mapping[str, NamespaceConfig],
         user_context: Any = None,
         cache_backend: CacheBackend | None = None,
-        params: dict | None = None,
+        params: dict[str, Any] | None = None,
     ) -> QueryResult:
         """
         Execute JSQL with full access control.
@@ -251,8 +252,8 @@ class JSQLExecutor:
             except Exception as e:  # noqa: BLE001
                 # Log compilation errors but don't fail the query
                 if structlog:
-                    logger = structlog.get_logger()
-                    logger.warning(
+                    struct_logger = cast(Any, structlog.get_logger())
+                    struct_logger.warning(
                         'Failed to cache query',
                         cache_key=cache_key,
                         error=str(e),
@@ -289,7 +290,7 @@ class JSQLExecutor:
     @staticmethod
     async def _execute_query(
         sql_query: Select,
-        params: dict | None,
+        params: dict[str, Any] | None,
         engine: Engine,
         debug_sql: str | None = None,
     ) -> QueryResult:
@@ -316,7 +317,7 @@ class JSQLExecutor:
     @staticmethod
     async def _execute_cached_query(  # noqa: PLR0913
         sql: str,
-        params: dict | None,
+        params: dict[str, Any] | None,
         engine: Engine,
         debug_sql: str | None = None,
         param_order: list[str] | None = None,
