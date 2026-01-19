@@ -31,6 +31,7 @@ from namerec.uma.jsql.cache.protocol import CacheBackend
 from namerec.uma.jsql.entity_extractor import extract_select_entities_from_ast
 from namerec.uma.jsql.parser import JSQLParser
 from namerec.uma.jsql.result import JSQLResultBuilder
+from namerec.uma.jsql.types import ColumnMetadata
 from namerec.uma.jsql.types import QueryResult
 
 
@@ -124,6 +125,7 @@ class JSQLExecutor:
                     config.engine,
                     debug_sql,
                     cached.param_order,
+                    cached.meta,
                 )
 
         # Cache miss - extract entities from AST
@@ -241,6 +243,7 @@ class JSQLExecutor:
                     param_order=param_order,  # Parameter order (for reference, not used for execution)
                     dialect=config.engine.dialect.name,
                     entities=select_entities,
+                    meta=result.meta,
                     param_types=param_types,
                     debug_sql=debug_sql,  # Cache debug SQL to avoid recompilation
                 )
@@ -316,7 +319,8 @@ class JSQLExecutor:
         params: dict | None,
         engine: Engine,
         debug_sql: str | None = None,
-        param_order: list[str] | None = None
+        param_order: list[str] | None = None,
+        cached_meta: list[ColumnMetadata] | None = None,
     ) -> QueryResult:
         """
         Execute cached SQL query and return result.
@@ -347,7 +351,7 @@ class JSQLExecutor:
                 # SQL has been converted to use named parameters (:param_name) for all dialects
                 # This works for SQLite (which supports named params) and other databases
                 result = await conn.execute(text(sql), params if params is not None else {})
-            return JSQLExecutor._format_cached_result(result, debug_sql)
+            return JSQLExecutor._format_cached_result(result, debug_sql, cached_meta)
         finally:
             await conn.close()
 
@@ -394,7 +398,11 @@ class JSQLExecutor:
         return JSQLParser._coerce_literal_value(value, expected_type)
 
     @staticmethod
-    def _format_cached_result(result: Any, debug_sql: str | None = None) -> QueryResult:
+    def _format_cached_result(
+        result: Any,
+        debug_sql: str | None = None,
+        cached_meta: list[ColumnMetadata] | None = None,
+    ) -> QueryResult:
         """
         Format cached query result.
 
@@ -405,9 +413,9 @@ class JSQLExecutor:
         Returns:
             QueryResult with data (metadata may be limited for cached queries)
         """
-        # For cached queries, metadata is not available (we don't have the original query AST)
+        # For cached queries, metadata is taken from the cache when available.
         data = [list(row) for row in result]
-        return QueryResult(meta=[], data=data, debug=debug_sql)
+        return QueryResult(meta=cached_meta or [], data=data, debug=debug_sql)
 
     @staticmethod
     def _compile_query(

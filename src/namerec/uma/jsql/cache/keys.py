@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
 
+from namerec.uma.jsql.types import ColumnMetadata
+
 
 def make_cache_key(
     jsql: dict[str, Any],
@@ -119,6 +121,7 @@ class CachedQuery:
     dialect: str  # SQL dialect (postgresql, mysql, etc.)
     literal_params: dict[str, Any] = field(default_factory=dict)  # SQLAlchemy-generated param names -> literal values
     entities: list[str] = field(default_factory=list)  # Entities in SELECT clause
+    meta: list[ColumnMetadata] = field(default_factory=list)  # Column metadata for cached results
     param_order: list[str] | None = None  # Parameter order for positional params (SQLite uses ?)
     param_types: dict[str, str] = field(default_factory=dict)  # JSQL param name -> type key
     debug_sql: str | None = None  # Formatted SQL for debug output (optional)
@@ -132,6 +135,7 @@ class CachedQuery:
             'param_order': self.param_order,
             'dialect': self.dialect,
             'entities': self.entities,
+            'meta': [col.to_dict() for col in self.meta],
             'param_types': self.param_types,
             'debug_sql': self.debug_sql,
         }
@@ -146,6 +150,7 @@ class CachedQuery:
             param_order=data.get('param_order'),
             dialect=data['dialect'],
             entities=data.get('entities', []),
+            meta=[ColumnMetadata(**col) for col in data.get('meta', [])],
             param_types=data.get('param_types', {}),
             debug_sql=data.get('debug_sql'),
         )
