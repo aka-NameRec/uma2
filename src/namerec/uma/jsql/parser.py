@@ -1,11 +1,11 @@
 """JSQL parser - converts JSQL (JSON-SQL) to SQLAlchemy queries."""
+# ruff: noqa: B904, C901, PLR0911, PLR0912, TRY003
 
 from collections.abc import Callable
 from collections.abc import Mapping
 from datetime import date
 from datetime import datetime
 from datetime import time
-from datetime import timezone
 from typing import Any
 
 from sqlalchemy import Column
@@ -17,9 +17,9 @@ from sqlalchemy import literal
 from sqlalchemy import select
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import ClauseElement
+from sqlalchemy.sql.sqltypes import TIMESTAMP
 from sqlalchemy.sql.sqltypes import Date
 from sqlalchemy.sql.sqltypes import DateTime
-from sqlalchemy.sql.sqltypes import TIMESTAMP
 
 from namerec.uma.core.exceptions import UMANotFoundError
 from namerec.uma.core.namespace_config import NamespaceConfig
@@ -822,7 +822,7 @@ class JSQLParser:
                     return value
 
                 if getattr(expected_type, 'timezone', False) and dt_value.tzinfo is None:
-                    return dt_value.replace(tzinfo=timezone.utc)
+                    return dt_value.replace(tzinfo=datetime.UTC)
                 return dt_value
         except (TypeError, ValueError) as exc:
             raise JSQLSyntaxError(

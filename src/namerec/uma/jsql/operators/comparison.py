@@ -26,7 +26,7 @@ class ComparisonOperatorHandler:
         """
         self.parser = parser
 
-    async def __call__(self, condition_spec: JSQLExpression, operator: JSQLOperator) -> ClauseElement:
+    async def __call__(self, condition_spec: JSQLExpression, operator: JSQLOperator) -> ClauseElement:  # noqa: C901, PLR0912
         """
         Handle comparison operator.
 
@@ -38,12 +38,16 @@ class ComparisonOperatorHandler:
             SQLAlchemy clause element
         """
         if operator not in COMPARISON_OPERATORS:
-            raise JSQLSyntaxError(f'Unknown comparison operator: {operator.value}')
+            raise JSQLSyntaxError(f'Unknown comparison operator: {operator.value}')  # noqa: TRY003
 
         if JSQLField.LEFT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.LEFT.value}" field')
+            raise JSQLSyntaxError(  # noqa: TRY003
+                f'{operator.value} operator must have "{JSQLField.LEFT.value}" field'
+            )
         if JSQLField.RIGHT.value not in condition_spec:
-            raise JSQLSyntaxError(f'{operator.value} operator must have "{JSQLField.RIGHT.value}" field')
+            raise JSQLSyntaxError(  # noqa: TRY003
+                f'{operator.value} operator must have "{JSQLField.RIGHT.value}" field'
+            )
 
         left_spec = condition_spec[JSQLField.LEFT.value]
         right_spec = condition_spec[JSQLField.RIGHT.value]
@@ -78,4 +82,4 @@ class ComparisonOperatorHandler:
             case JSQLOperator.GE:
                 return left >= right
             case _:
-                raise JSQLSyntaxError(f'Unknown comparison operator: {operator.value}')
+                raise JSQLSyntaxError(f'Unknown comparison operator: {operator.value}')  # noqa: TRY003

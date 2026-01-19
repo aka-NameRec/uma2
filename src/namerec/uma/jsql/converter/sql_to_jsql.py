@@ -48,6 +48,21 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         parse_start = perf_counter()
         parsed = sqlglot.parse_one(sql, read=dialect if dialect != 'generic' else None)
         parse_ms = (perf_counter() - parse_start) * 1000
+    except sqlglot.ParseError as e:
+        logger.exception('Failed to parse SQL', exc_info=False)
+        raise JSQLSyntaxError(
+            message=f'Failed to parse SQL: {e!s}',
+            path='',
+        ) from e
+    except JSQLSyntaxError:
+        raise
+    except Exception as e:
+        logger.exception('Unexpected error during SQL conversion')
+        raise JSQLSyntaxError(
+            message=f'Failed to convert SQL to JSQL: {e!s}',
+            path='',
+        ) from e
+    else:
         if not isinstance(parsed, exp.Select):
             raise JSQLSyntaxError(
                 message=f'Only SELECT queries are supported, got {type(parsed).__name__}',
@@ -62,21 +77,6 @@ def sql_to_jsql(sql: str, dialect: str = 'generic') -> JSQLQuery:
         logger.info('Successfully converted SQL to JSQL')
         logger.debug(f'Generated JSQL: {jsql}')
         return jsql
-
-    except sqlglot.ParseError as e:
-        logger.error(f'Failed to parse SQL: {e}')
-        raise JSQLSyntaxError(
-            message=f'Failed to parse SQL: {e!s}',
-            path='',
-        ) from e
-    except JSQLSyntaxError:
-        raise
-    except Exception as e:
-        logger.error(f'Unexpected error during SQL conversion: {e}', exc_info=True)
-        raise JSQLSyntaxError(
-            message=f'Failed to convert SQL to JSQL: {e!s}',
-            path='',
-        ) from e
     finally:
         total_ms = (perf_counter() - started_at) * 1000
         parse_label = f'{parse_ms:.2f}ms' if parse_ms is not None else 'n/a'

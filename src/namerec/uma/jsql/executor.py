@@ -7,20 +7,20 @@ from typing import Any
 try:
     import sqlparse
 except ImportError:
-    sqlparse = None  # type: ignore[assignment]
+    sqlparse = None
 
 try:
     import structlog
 except ImportError:
-    structlog = None  # type: ignore[assignment]
+    structlog = None
 
 from sqlalchemy import Engine
 from sqlalchemy import text
 from sqlalchemy.engine import Compiled
 from sqlalchemy.sql.expression import Select
+from sqlalchemy.sql.sqltypes import TIMESTAMP
 from sqlalchemy.sql.sqltypes import Date
 from sqlalchemy.sql.sqltypes import DateTime
-from sqlalchemy.sql.sqltypes import TIMESTAMP
 
 from namerec.uma.core.access import check_access
 from namerec.uma.core.namespace_config import NamespaceConfig
@@ -39,7 +39,7 @@ class JSQLExecutor:
     """JSQL query executor - stateless namespace holder."""
 
     @classmethod
-    async def execute(
+    async def execute(  # noqa: C901, PLR0912, PLR0915
         cls,
         jsql: dict,
         namespace_configs: Mapping[str, NamespaceConfig],
@@ -68,7 +68,7 @@ class JSQLExecutor:
         """
         # Validate FROM field early (before parsing)
         if 'from' not in jsql:
-            raise ValueError("JSQL must contain 'from' field")
+            raise ValueError("JSQL must contain 'from' field")  # noqa: TRY003
 
         # Parse query - returns AST, config, and parameter mapping (namespace already validated)
         parser = JSQLParser(namespace_configs)
@@ -248,7 +248,7 @@ class JSQLExecutor:
                     debug_sql=debug_sql,  # Cache debug SQL to avoid recompilation
                 )
                 cache_backend.set(cache_key, cached_query)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # Log compilation errors but don't fail the query
                 if structlog:
                     logger = structlog.get_logger()
@@ -314,7 +314,7 @@ class JSQLExecutor:
             await conn.close()
 
     @staticmethod
-    async def _execute_cached_query(
+    async def _execute_cached_query(  # noqa: PLR0913
         sql: str,
         params: dict | None,
         engine: Engine,
@@ -340,7 +340,7 @@ class JSQLExecutor:
                 bound_params = params or {}
                 missing_params = [name for name in param_order if name not in bound_params]
                 if missing_params:
-                    raise ValueError(
+                    raise ValueError(  # noqa: TRY003
                         f'Missing cached SQL parameters: {missing_params}. '
                         f'Available keys: {sorted(bound_params.keys())}'
                     )
@@ -470,10 +470,10 @@ class JSQLExecutor:
                 sql_str = str(compiled)
 
             # Format SQL for readability
-            if sqlparse:
-                return sqlparse.format(sql_str, reindent=True, keyword_case='upper')
-            return sql_str
+            formatted = sqlparse.format(sql_str, reindent=True, keyword_case='upper') if sqlparse else sql_str
         except (AttributeError, TypeError) as e:
             # Debug mode should never break query execution
             # Catch formatting errors (sqlparse import issues, formatting errors)
             return f'-- Failed to generate debug SQL: {e!s}'
+        else:
+            return formatted
