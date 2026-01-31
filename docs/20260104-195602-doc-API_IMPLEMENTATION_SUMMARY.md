@@ -32,7 +32,7 @@
    - Добавлены экспорты всех API функций
 
 2. **`src/namerec/uma/core/types.py`**
-   - Добавлена операция `Operation.LIST`
+   - Добавлена операция `OP_LIST`
 
 3. **`src/namerec/uma/metadata.py`**
    - Добавлен метод `can()` для проверки доступа
@@ -178,13 +178,13 @@ uma.registry.register('custom_view', MyViewHandler)
 ### Реализация `can()` метода
 
 ```python
-from namerec.uma import DefaultMetadataProvider, Operation, UMAContext
+from namerec.uma import DefaultMetadataProvider, OP_LIST, OP_META, OP_READ, UMAContext
 
 class MyMetadataProvider(DefaultMetadataProvider):
-    def can(
+    async def can(
         self,
         entity_name: str,
-        operation: Operation | str,
+        operation: str,
         context: UMAContext,
     ) -> bool:
         user = context.user_context
@@ -196,7 +196,7 @@ class MyMetadataProvider(DefaultMetadataProvider):
             return True
         
         if user.role == 'user':
-            return operation in (Operation.READ, Operation.META, Operation.LIST)
+            return operation in (OP_READ, OP_META, OP_LIST)
         
         return False
 ```
@@ -228,15 +228,14 @@ except UMAAccessDeniedError:
 ## Типы Операций
 
 ```python
-from namerec.uma import Operation
+from namerec.uma import OP_CREATE, OP_DELETE, OP_LIST, OP_META, OP_READ, OP_UPDATE
 
-Operation.SELECT  # JSQL запрос
-Operation.READ    # Чтение записи
-Operation.CREATE  # Создание записи
-Operation.UPDATE  # Обновление записи
-Operation.DELETE  # Удаление записи
-Operation.META    # Получение метаданных
-Operation.LIST    # Список сущностей
+OP_READ    # Чтение/SELECT (включая JSQL)
+OP_CREATE  # Создание записи
+OP_UPDATE  # Обновление записи
+OP_DELETE  # Удаление записи
+OP_META    # Получение метаданных
+OP_LIST    # Список сущностей
 ```
 
 ## Примеры Запуска
@@ -272,7 +271,7 @@ uv run pytest tests/test_api.py -v
 
 Функция `_check_access()`:
 - Вызывает `metadata_provider.can()`
-- Поддерживает как `Operation` enum, так и строки
+- Операции задаются строками (константы `OP_*` для удобства)
 - Выбрасывает `UMAAccessDeniedError` при отказе
 
 ### 4. Namespace Support

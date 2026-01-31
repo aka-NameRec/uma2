@@ -14,7 +14,8 @@ uma2/
 │           ├── py.typed          # PEP 561 marker for type checking
 │           ├── core/             # Core components
 │           │   ├── __init__.py
-│           │   ├── types.py      # Type definitions (EntityName, Operation, Protocols)
+│           │   ├── types.py      # Type definitions (EntityName, Protocols)
+│           │   ├── operations.py # Operation constants (OP_READ, OP_CREATE, ...)
 │           │   ├── context.py    # UMAContext
 │           │   ├── exceptions.py # Exception hierarchy
 │           │   └── utils.py      # Utility functions
@@ -72,7 +73,12 @@ from namerec.uma import (
     
     # Core types
     EntityName,
-    Operation,
+    OP_CREATE,
+    OP_DELETE,
+    OP_LIST,
+    OP_META,
+    OP_READ,
+    OP_UPDATE,
     EntityHandler,
     MetadataProvider,
     UMAContext,
@@ -109,7 +115,7 @@ from namerec.uma import (
 
 - **types.py**: Defines core types and protocols
   - `EntityName`: Structured entity name with optional namespace
-  - `Operation`: Enum for UMA operations (SELECT, READ, CREATE, UPDATE, DELETE, META)
+  - Operation constants: `OP_READ`, `OP_CREATE`, `OP_UPDATE`, `OP_DELETE`, `OP_META`, `OP_LIST`
   - `EntityHandler`: Protocol for entity handlers
   - `MetadataProvider`: Protocol for metadata providers
 

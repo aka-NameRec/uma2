@@ -1,7 +1,6 @@
 """Type definitions for UMA."""
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 from typing import Protocol
 from typing import runtime_checkable
@@ -10,18 +9,6 @@ from sqlalchemy import Engine
 from sqlalchemy import MetaData
 from sqlalchemy import Select
 from sqlalchemy import Table
-
-
-class Operation(str, Enum):
-    """UMA operations enum."""
-
-    SELECT = 'select'
-    READ = 'read'
-    CREATE = 'create'
-    UPDATE = 'update'
-    DELETE = 'delete'
-    META = 'meta'
-    LIST = 'list'  # For listing entities
 
 
 @dataclass(frozen=True)
@@ -295,11 +282,11 @@ class MetadataProvider(Protocol):
         """
         ...
 
-    def can(
+    async def can(
         self,
         entity_name: str,
-        operation: Operation | str,
-        user_context: Any,
+        operation: str,
+        context: UMAContextSpec,
     ) -> bool:
         """
         Check access to operation.
@@ -307,7 +294,7 @@ class MetadataProvider(Protocol):
         Args:
             entity_name: Entity name (empty string for "list entities" operation)
             operation: Operation to check
-            user_context: User context for access control
+            context: Execution context for access control
 
         Returns:
             True if access allowed, False otherwise

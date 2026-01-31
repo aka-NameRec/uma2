@@ -23,15 +23,16 @@ from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from namerec.uma import OP_LIST
+from namerec.uma import OP_META
+from namerec.uma import OP_READ
+from namerec.uma import UMA
 from namerec.uma import DefaultMetadataProvider
 from namerec.uma import NamespaceConfig
-from namerec.uma import Operation
-from namerec.uma import UMA
 from namerec.uma import UMAAccessDeniedError
 from namerec.uma import UMAContext
 from namerec.uma import VirtualViewHandler
 from namerec.uma import copy_field_meta
-
 
 # ========== Custom Metadata Provider with Access Control ==========
 
@@ -39,10 +40,10 @@ from namerec.uma import copy_field_meta
 class AccessControlMetadataProvider(DefaultMetadataProvider):
     """Metadata provider with access control."""
 
-    def can(
+    async def can(
         self,
         entity_name: str,
-        operation: Operation | str,
+        operation: str,
         context: UMAContext,
     ) -> bool:
         """
@@ -50,7 +51,7 @@ class AccessControlMetadataProvider(DefaultMetadataProvider):
 
         Args:
             entity_name: Entity name (empty for list operation)
-            operation: Operation to check
+            operation: Operation name to check
             context: Execution context with user_context
 
         Returns:
@@ -59,7 +60,7 @@ class AccessControlMetadataProvider(DefaultMetadataProvider):
         user = context.user_context
 
         # Special case: list entities
-        if entity_name == '' and (operation == Operation.META or operation == 'meta'):
+        if entity_name == '' and operation == OP_META:
             return user is not None  # Only authenticated users
 
         # Check if user authenticated
@@ -74,7 +75,7 @@ class AccessControlMetadataProvider(DefaultMetadataProvider):
 
         # Regular user: read/list/meta only
         if user_role == 'user':
-            return operation in (Operation.READ, Operation.LIST, Operation.META, 'read', 'list', 'meta')
+            return operation in (OP_READ, OP_LIST, OP_META)
 
         # Guest: no access
         return False
@@ -110,7 +111,7 @@ class UserSummaryView(VirtualViewHandler):
     description = 'Summary of user orders'
 
     @classmethod
-    async def select(cls, entity_name, params, context):  # noqa: ANN001, ANN201
+    async def select(cls, entity_name, params, context):  # noqa: ANN001
         """Build SELECT for user summary."""
         users = context.metadata.tables['users']
         orders = context.metadata.tables['orders']
@@ -133,7 +134,7 @@ class UserSummaryView(VirtualViewHandler):
         return query
 
     @classmethod
-    async def meta(cls, entity_name, context, registry):  # noqa: ANN001, ANN201
+    async def meta(cls, entity_name, context, registry):  # noqa: ANN001
         """Return metadata for virtual view."""
         columns_metadata = [
             await copy_field_meta('users', 'id', context, registry, {'name': 'user_id'}),

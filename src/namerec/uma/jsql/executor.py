@@ -24,8 +24,9 @@ from sqlalchemy.sql.sqltypes import Date
 from sqlalchemy.sql.sqltypes import DateTime
 
 from namerec.uma.core.access import check_access
+from namerec.uma.core.context import UMAContext
 from namerec.uma.core.namespace_config import NamespaceConfig
-from namerec.uma.core.types import Operation
+from namerec.uma.core.operations import OP_READ
 from namerec.uma.jsql.cache.keys import CachedQuery
 from namerec.uma.jsql.cache.keys import make_cache_key
 from namerec.uma.jsql.cache.protocol import CacheBackend
@@ -73,7 +74,13 @@ class JSQLExecutor:
 
         # Parse query - returns AST, config, and parameter mapping (namespace already validated)
         parser = JSQLParser(namespace_configs)
-        sql_query, config, param_mapping = await parser.parse(jsql, params)
+        sql_query, config, param_mapping, namespace = await parser.parse(jsql, params)
+        context = UMAContext(
+            engine=config.engine,
+            metadata_provider=config.metadata_provider,
+            namespace=namespace,
+            user_context=user_context,
+        )
 
         # Try cache (namespace already in jsql, so cache key is unique)
         # Cache key depends on JSQL structure and user context, NOT on parameter values
@@ -87,10 +94,9 @@ class JSQLExecutor:
 
             if cached:
                 # Check access to SELECT entities (even for cached queries!)
-                cls._check_select_access(
+                await cls._check_select_access(
                     entities=cached.entities,
-                    metadata_provider=config.metadata_provider,
-                    user_context=user_context,
+                    context=context,
                 )
                 # Execute cached SQL
                 # Use cached debug_sql if available, otherwise format on demand
@@ -134,10 +140,9 @@ class JSQLExecutor:
         select_entities = extract_select_entities_from_ast(sql_query, from_entity)
 
         # Check access to all SELECT entities
-        cls._check_select_access(
+        await cls._check_select_access(
             entities=select_entities,
-            metadata_provider=config.metadata_provider,
-            user_context=user_context,
+            context=context,
         )
 
         # Execute
@@ -263,28 +268,26 @@ class JSQLExecutor:
         return result
 
     @staticmethod
-    def _check_select_access(
+    async def _check_select_access(
         entities: list[str],
-        metadata_provider: Any,
-        user_context: Any,
+        context: UMAContext,
     ) -> None:
         """
         Check access to SELECT entities.
 
         Args:
             entities: List of entity names to check
-            metadata_provider: Metadata provider for access control
-            user_context: User context for permission checks
+            context: Execution context for permission checks
 
         Raises:
             UMAAccessDeniedError: If access denied to any entity
         """
         for select_entity in entities:
-            check_access(
-                metadata_provider=metadata_provider,
+            await check_access(
+                metadata_provider=context.metadata_provider,
                 entity_name=select_entity,
-                operation=Operation.SELECT,
-                user_context=user_context,
+                operation=OP_READ,
+                context=context,
             )
 
     @staticmethod

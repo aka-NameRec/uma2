@@ -1,5 +1,7 @@
 """Pytest configuration and fixtures."""
 
+from pathlib import Path
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import Column
@@ -32,9 +34,10 @@ def metadata() -> MetaData:
 
 
 @pytest_asyncio.fixture
-async def engine(metadata: MetaData):  # noqa: ANN201
+async def engine(tmp_path: Path):  # noqa: ANN201
     """Create async engine with test database."""
-    engine = create_async_engine('sqlite+aiosqlite:///:memory:')
+    db_path = tmp_path / 'uma_test.db'
+    engine = create_async_engine(f'sqlite+aiosqlite:///{db_path}')
 
     yield engine
 

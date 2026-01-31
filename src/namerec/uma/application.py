@@ -7,10 +7,14 @@ from typing import Any
 
 from namerec.uma.core.access import check_access
 from namerec.uma.core.context import UMAContext
+from namerec.uma.core.operations import OP_CREATE
+from namerec.uma.core.operations import OP_DELETE
+from namerec.uma.core.operations import OP_META
+from namerec.uma.core.operations import OP_READ
+from namerec.uma.core.operations import OP_UPDATE
 from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
-from namerec.uma.core.types import Operation
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
 from namerec.uma.jsql.cache import CacheBackend
@@ -169,7 +173,7 @@ class UMA:
             UMANotFoundError: If record not found
         """
         params = await self._prepare_operation(
-            entity_name, Operation.READ, namespace, user_context
+            entity_name, OP_READ, namespace, user_context
         )
         return await params.handler.read(params.entity, id_value, params.context)
 
@@ -198,7 +202,7 @@ class UMA:
         """
         # Determine operation (create or update)
         has_id = any(data.get(key) is not None for key in ['id', 'ID'])
-        operation = Operation.UPDATE if has_id else Operation.CREATE
+        operation = OP_UPDATE if has_id else OP_CREATE
 
         params = await self._prepare_operation(
             entity_name, operation, namespace, user_context
@@ -229,7 +233,7 @@ class UMA:
             UMANotFoundError: If record not found
         """
         params = await self._prepare_operation(
-            entity_name, Operation.DELETE, namespace, user_context
+            entity_name, OP_DELETE, namespace, user_context
         )
         return await params.handler.delete(params.entity, id_value, params.context)
 
@@ -255,7 +259,7 @@ class UMA:
             UMANotFoundError: If entity not found
         """
         params = await self._prepare_operation(
-            entity_name, Operation.META, namespace, user_context
+            entity_name, OP_META, namespace, user_context
         )
         return await params.handler.meta(params.entity, params.context)
 
@@ -282,7 +286,7 @@ class UMA:
         context = self._create_context(namespace, user_context)
 
         # Check access (empty entity_name means "list entities" operation)
-        self._check_access('', Operation.META, context)
+        await self._check_access('', OP_META, context)
 
         # Get list from MetadataProvider
         entities = await context.metadata_provider.list_entities(
@@ -340,7 +344,7 @@ class UMA:
     async def _prepare_operation(
         self,
         entity_name: str,
-        operation: Operation,
+        operation: str,
         namespace: str | None = None,
         user_context: Any = None,
     ) -> _EntityOperationParams:
@@ -349,7 +353,7 @@ class UMA:
 
         Args:
             entity_name: Entity name (can include namespace)
-            operation: Operation type for access control
+            operation: Operation name for access control
             namespace: Optional namespace override
             user_context: User context for access control
 
@@ -369,7 +373,7 @@ class UMA:
         context = self._create_context(entity.namespace, user_context)
 
         # Check access
-        self._check_access(str(entity), operation, context)
+        await self._check_access(str(entity), operation, context)
 
         # Get handler
         handler = await self.registry.get_handler(entity, context)
@@ -444,10 +448,10 @@ class UMA:
 
         return self.namespace_configs[namespace]
 
-    def _check_access(
+    async def _check_access(
         self,
         entity_name: str,
-        operation: Operation | str,
+        operation: str,
         context: UMAContext,
     ) -> None:
         """
@@ -461,11 +465,11 @@ class UMA:
         Raises:
             UMAAccessDeniedError: If access denied
         """
-        check_access(
+        await check_access(
             metadata_provider=context.metadata_provider,
             entity_name=entity_name,
             operation=operation,
-            user_context=context.user_context,
+            context=context,
         )
 
     # ========== Cache Management API ==========

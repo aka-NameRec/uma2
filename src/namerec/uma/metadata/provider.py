@@ -5,8 +5,8 @@ from sqlalchemy import Table
 
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMANotFoundError
+from namerec.uma.core.operations import OP_META
 from namerec.uma.core.types import EntityName
-from namerec.uma.core.types import Operation
 from namerec.uma.metadata.cache import MetadataCache
 from namerec.uma.metadata.reflector import DatabaseReflector
 
@@ -257,10 +257,10 @@ class DefaultMetadataProvider:
             return context.namespace
         return 'default'
 
-    def can(
+    async def can(
         self,
         entity_name: str,
-        operation: Operation | str,
+        operation: str,
         context: UMAContext,  # noqa: ARG002
     ) -> bool:
         """
@@ -278,7 +278,7 @@ class DefaultMetadataProvider:
             True if access allowed, False otherwise
         """
         # Special case: listing entities
-        if entity_name == '' and operation in {Operation.META, 'meta'}:
+        if entity_name == '' and operation == OP_META:
             # Allow listing for everyone by default
             return True
 

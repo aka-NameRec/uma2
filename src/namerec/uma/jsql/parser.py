@@ -101,7 +101,7 @@ class JSQLParser:
         self,
         jsql: JSQLQuery,
         params: dict[str, Any] | None = None,
-    ) -> tuple[Select, NamespaceConfig, dict[str, str]]:
+    ) -> tuple[Select, NamespaceConfig, dict[str, str], str]:
         """
         Parse JSQL query into SQLAlchemy Select statement and namespace config.
 
@@ -110,7 +110,7 @@ class JSQLParser:
             params: Query parameters
 
         Returns:
-            Tuple of (SQLAlchemy Select statement, NamespaceConfig, param_mapping)
+            Tuple of (SQLAlchemy Select statement, NamespaceConfig, param_mapping, namespace)
             param_mapping: Dictionary mapping JSQL parameter names to SQL parameter names
 
         Raises:
@@ -143,7 +143,7 @@ class JSQLParser:
         # Since we use key=param_name in bindparam(), the key should match the JSQL param name
         param_mapping = {jsql_name: bindparam_obj.key for jsql_name, bindparam_obj in self._param_bindparams.items()}
 
-        return query, config, param_mapping
+        return query, config, param_mapping, namespace
 
     async def _parse_ctes(self, ctes: list[dict[str, Any]]) -> None:
         """
