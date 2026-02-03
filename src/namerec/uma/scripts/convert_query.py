@@ -97,26 +97,27 @@ def convert(
 
     except typer.Exit:
         raise
-    except Exception as e:
-        typer.echo(f'Error: {e}', err=True)
-        raise typer.Exit(1)
+    except Exception as err:
+        typer.echo(f'Error: {err}', err=True)
+        # Preserve original traceback chain for debugging unexpected CLI failures.
+        raise typer.Exit(1) from err
 
 
 def _convert_jsql_to_sql(input_text: str, dialect: str, pretty: bool) -> str:
     """Convert JSQL (JSON) to SQL."""
     try:
         jsql = json.loads(input_text)
-    except json.JSONDecodeError as e:
-        typer.echo(f'Error: Invalid JSON: {e}', err=True)
-        raise typer.Exit(1)
+    except json.JSONDecodeError as err:
+        typer.echo(f'Error: Invalid JSON: {err}', err=True)
+        raise typer.Exit(1) from err
 
     try:
         sql = jsql_to_sql(jsql, dialect=dialect)
-    except JSQLSyntaxError as e:
-        typer.echo(f'Error: Invalid JSQL: {e!s}', err=True)
-        if hasattr(e, 'path') and e.path:
-            typer.echo(f'  at path: {e.path}', err=True)
-        raise typer.Exit(1)
+    except JSQLSyntaxError as err:
+        typer.echo(f'Error: Invalid JSQL: {err!s}', err=True)
+        if hasattr(err, 'path') and err.path:
+            typer.echo(f'  at path: {err.path}', err=True)
+        raise typer.Exit(1) from err
 
     if not pretty:
         # Strip formatting for compact output
@@ -129,9 +130,9 @@ def _convert_sql_to_jsql(input_text: str, dialect: str, pretty: bool) -> str:
     """Convert SQL to JSQL (JSON)."""
     try:
         jsql = sql_to_jsql(input_text, dialect=dialect)
-    except JSQLSyntaxError as e:
-        typer.echo(f'Error: Failed to parse SQL: {e!s}', err=True)
-        raise typer.Exit(1)
+    except JSQLSyntaxError as err:
+        typer.echo(f'Error: Failed to parse SQL: {err!s}', err=True)
+        raise typer.Exit(1) from err
 
     if pretty:
         return json.dumps(jsql, indent=2)
