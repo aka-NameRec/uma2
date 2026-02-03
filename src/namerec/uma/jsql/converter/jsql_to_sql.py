@@ -1,14 +1,16 @@
 """JSQL to SQL conversion."""
 
 import logging
-from typing import Any
+from typing import cast
 
+import sqlglot.expressions as exp
 import sqlparse
 
 from namerec.uma.jsql.converter.jsql_to_sqlglot import jsql_from_to_sqlglot as _jsql_from_to_sqlglot
 from namerec.uma.jsql.converter.jsql_to_sqlglot import jsql_query_to_sqlglot as _jsql_query_to_sqlglot
 from namerec.uma.jsql.converter.jsql_to_sqlglot import jsql_select_to_sqlglot as _jsql_select_to_sqlglot
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
+from namerec.uma.jsql.types import JSQLExpression
 from namerec.uma.jsql.types import JSQLQuery
 
 logger = logging.getLogger(__name__)
@@ -27,17 +29,13 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
     try:
         query = _jsql_query_to_sqlglot(jsql)
 
-        sql_str = query.sql(dialect=dialect if dialect != 'generic' else None, pretty=True)
+        sql_str = str(query.sql(dialect=dialect if dialect != 'generic' else None, pretty=True))
 
-        formatted_sql = sqlparse.format(
+        formatted_sql = str(sqlparse.format(
             sql_str,
             reindent=True,
             keyword_case='upper',
-        )
-
-        logger.info(f'Successfully converted JSQL to SQL ({dialect})')
-        logger.debug(f'Generated SQL:\n{formatted_sql}')
-        return formatted_sql
+        ))
 
     except JSQLSyntaxError as e:
         logger.error(f'Failed to convert JSQL: {e}', exc_info=True)
@@ -48,18 +46,22 @@ def jsql_to_sql(jsql: JSQLQuery, dialect: str = 'generic') -> str:
             message=f'Failed to convert JSQL to SQL: {e!s}',
             path='',
         ) from e
+    else:
+        logger.info(f'Successfully converted JSQL to SQL ({dialect})')
+        logger.debug(f'Generated SQL:\n{formatted_sql}')
+        return formatted_sql
 
 
-def jsql_query_to_sqlglot(jsql: dict[str, Any]):
+def jsql_query_to_sqlglot(jsql: JSQLQuery) -> exp.Select:
     """Compatibility wrapper for direct SQLGlot conversion."""
     return _jsql_query_to_sqlglot(jsql)
 
 
-def jsql_select_to_sqlglot(select_spec: list[dict[str, Any]] | None):
+def jsql_select_to_sqlglot(select_spec: list[JSQLExpression] | None) -> list[exp.Expression]:
     """Compatibility wrapper for SELECT conversion."""
-    return _jsql_select_to_sqlglot(select_spec)
+    return cast('list[exp.Expression]', _jsql_select_to_sqlglot(select_spec))
 
 
-def jsql_from_to_sqlglot(from_spec: str | dict[str, Any] | None):
+def jsql_from_to_sqlglot(from_spec: str | JSQLExpression | None) -> exp.Table:
     """Compatibility wrapper for FROM conversion."""
     return _jsql_from_to_sqlglot(from_spec)

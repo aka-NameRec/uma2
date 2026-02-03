@@ -175,7 +175,8 @@ class DefaultEntityHandler:
         async with context.engine.begin() as conn:
             stmt = sql_delete(table).where(pk_condition)
             result = await conn.execute(stmt)
-            return result.rowcount > 0
+            rowcount = int(result.rowcount or 0)
+            return rowcount > 0
 
     @classmethod
     async def meta(

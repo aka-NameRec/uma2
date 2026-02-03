@@ -49,7 +49,7 @@ def extract_pattern(
     if 'right' in cond_spec:
         right_expr = expression_converter(cond_spec['right'])
         if isinstance(right_expr, exp.Literal) and right_expr.is_string:
-            return right_expr.this
+            return str(right_expr.this)
 
     return None
 

@@ -89,16 +89,26 @@ def _extract_over_partition(expr: exp.Window) -> list[JSQLExpression]:
     part_by_arg = expr.args.get('partition_by')
     if part_by_arg is None:
         return []
-    expressions = part_by_arg if isinstance(part_by_arg, list) else getattr(part_by_arg, 'expressions', [])
-    return [convert_expression_to_jsql(part_expr) for part_expr in expressions]
+    if isinstance(part_by_arg, list):
+        expressions = part_by_arg
+    elif isinstance(part_by_arg, exp.Partition):
+        expressions = part_by_arg.expressions
+    else:
+        return []
+    return [convert_expression_to_jsql(part_expr) for part_expr in expressions if isinstance(part_expr, exp.Expression)]
 
 
 def _extract_over_order(expr: exp.Window) -> list[dict[str, Any]]:
     order_arg = expr.args.get('order')
     if order_arg is None:
         return []
-    expressions = order_arg if isinstance(order_arg, list) else getattr(order_arg, 'expressions', [])
-    return [convert_order_to_jsql(order_expr) for order_expr in expressions]
+    if isinstance(order_arg, list):
+        expressions = order_arg
+    elif isinstance(order_arg, exp.Order):
+        expressions = order_arg.expressions
+    else:
+        return []
+    return [convert_order_to_jsql(order_expr) for order_expr in expressions if isinstance(order_expr, exp.Ordered)]
 
 
 def _convert_window_expression(expr: exp.Expression) -> JSQLExpression:
@@ -314,7 +324,7 @@ def convert_order_to_jsql(order_expr: exp.Ordered) -> dict[str, Any]:
         )
 
     field_expr = convert_expression_to_jsql(order_expr.this)
-    result = field_expr.copy()
+    result = dict(field_expr)
     direction = OrderDirection.DESC if order_expr.args.get('desc') else OrderDirection.ASC
     result['direction'] = direction.value.upper()
 

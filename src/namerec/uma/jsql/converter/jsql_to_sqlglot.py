@@ -2,6 +2,7 @@
 
 import logging
 from typing import Any
+from typing import cast
 
 import sqlglot.expressions as exp
 
@@ -54,8 +55,9 @@ def convert_function_call(expr_spec: dict[str, Any]) -> exp.Expression:
     if distinct and args:
         args[0] = exp.Distinct(expressions=[args[0]])
 
-    func_class = getattr(exp, func.upper(), None)
-    if func_class and issubclass(func_class, exp.Func):
+    func_class_obj = getattr(exp, func.upper(), None)
+    if isinstance(func_class_obj, type) and issubclass(func_class_obj, exp.Func):
+        func_class = cast('type[exp.Func]', func_class_obj)
         logger.debug(f'Using specific sqlglot function: {func_class.__name__}')
         if distinct and args:
             return func_class(this=args[0], expressions=args[1:])
@@ -111,33 +113,26 @@ def jsql_expression_to_sqlglot(expr_spec: dict[str, Any] | str) -> exp.Expressio
     if isinstance(expr_spec, str):
         return convert_field_reference(expr_spec)
 
-    if isinstance(expr_spec, dict):
-        if 'field' in expr_spec:
-            return convert_field_reference(expr_spec['field'])
-        if 'value' in expr_spec:
-            return convert_literal_value(expr_spec['value'])
-        if 'func' in expr_spec:
-            return convert_function_call(expr_spec)
-        if 'op' in expr_spec:
-            return convert_arithmetic_op(expr_spec)
-        if 'from' in expr_spec and 'select' in expr_spec:
-            subquery_select = jsql_query_to_sqlglot_select(expr_spec)
-            return exp.Subquery(this=subquery_select)
-
-        raise InvalidExpressionError(
-            message="Expression must contain one of: 'field', 'value', 'func', 'op', or subquery ('from')",
-            path='',
-            expression=expr_spec,
-        )
+    if 'field' in expr_spec:
+        return convert_field_reference(expr_spec['field'])
+    if 'value' in expr_spec:
+        return convert_literal_value(expr_spec['value'])
+    if 'func' in expr_spec:
+        return convert_function_call(expr_spec)
+    if 'op' in expr_spec:
+        return convert_arithmetic_op(expr_spec)
+    if 'from' in expr_spec and 'select' in expr_spec:
+        subquery_select = jsql_query_to_sqlglot_select(expr_spec)
+        return exp.Subquery(this=subquery_select)
 
     raise InvalidExpressionError(
-        message=f'Expression must be string or dict, got {type(expr_spec).__name__}',
+        message="Expression must contain one of: 'field', 'value', 'func', 'op', or subquery ('from')",
         path='',
-        expression={'type': type(expr_spec).__name__, 'value': repr(expr_spec)},
+        expression=expr_spec,
     )
 
 
-def jsql_join_to_sqlglot(join_spec: dict[str, Any]) -> dict[str, Any]:
+def jsql_join_to_sqlglot(join_spec: Any) -> dict[str, Any]:
     """
     Convert JSQL JOIN to sqlglot join components.
 
@@ -216,7 +211,7 @@ def jsql_select_to_sqlglot(select_spec: list[dict[str, Any]] | None) -> list[exp
 
     converted_fields: list[exp.Expression] = []
     for field_spec in select_spec:
-        if isinstance(field_spec, dict) and 'over' in field_spec:
+        if 'over' in field_spec:
             field_expr = _build_window_expression(field_spec)
         else:
             field_expr = jsql_expression_to_sqlglot(field_spec)
@@ -232,22 +227,15 @@ def jsql_from_to_sqlglot(from_spec: str | dict[str, Any] | None) -> exp.Table:
 
     if isinstance(from_spec, str):
         return exp.table_(from_spec)
-
-    if isinstance(from_spec, dict):
-        if 'entity' not in from_spec:
-            raise MissingFieldError('entity', path='from.entity', context='FROM with alias')
-        entity = from_spec['entity']
-        alias = from_spec.get('alias')
-        table_expr = exp.table_(entity)
-        if alias:
-            table_expr = exp.alias_(table_expr, alias, table=True)
-        return table_expr
-
-    raise InvalidExpressionError(
-        message=f'FROM must be string or dict, got {type(from_spec).__name__}',
-        path='from',
-        expression={'type': type(from_spec).__name__, 'value': repr(from_spec)},
-    )
+    from_dict = from_spec
+    if 'entity' not in from_dict:
+        raise MissingFieldError('entity', path='from.entity', context='FROM with alias')
+    entity = from_dict['entity']
+    alias = from_dict.get('alias')
+    table_expr = exp.table_(entity)
+    if alias:
+        table_expr = exp.alias_(table_expr, alias, table=True)
+    return table_expr
 
 
 def _build_ctes(with_clause: list[dict[str, Any]]) -> list[exp.CTE]:

@@ -1,5 +1,7 @@
 """JSQL-specific exceptions."""
 
+from typing import Any
+
 
 class JSQLSyntaxError(ValueError):
     """Raised when JSQL syntax is invalid."""
@@ -22,7 +24,12 @@ class JSQLSyntaxError(ValueError):
 class JSQLExecutionError(RuntimeError):
     """Raised when JSQL query execution fails."""
 
-    def __init__(self, message: str, query: dict | None = None, original_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        query: dict[str, Any] | None = None,
+        original_error: Exception | None = None,
+    ) -> None:
         """
         Initialize JSQLExecutionError.
 

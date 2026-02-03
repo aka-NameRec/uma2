@@ -4,6 +4,9 @@
 import json
 import sys
 from typing import Annotated
+from typing import Any
+from typing import NoReturn
+from typing import cast
 
 import typer
 
@@ -14,7 +17,13 @@ from namerec.uma.jsql.exceptions import JSQLSyntaxError
 app = typer.Typer(help='Convert between SQL and JSQL formats with automatic format detection.')
 
 
-@app.command()
+def _exit_with_error(message: str) -> NoReturn:
+    """Print CLI error message and terminate with non-zero exit code."""
+    typer.echo(f'Error: {message}', err=True)
+    raise typer.Exit(1)
+
+
+@app.command()  # type: ignore[misc]
 def convert(
     input_file: Annotated[
         typer.FileText | None,
@@ -67,8 +76,7 @@ def convert(
         input_text = input_text.strip()
 
         if not input_text:
-            typer.echo('Error: No input provided', err=True)
-            raise typer.Exit(1)
+            _exit_with_error('No input provided')
 
         # Auto-detect format or use forced format
         if output_format:
@@ -80,8 +88,7 @@ def convert(
                 # Convert SQL to JSQL
                 result = _convert_sql_to_jsql(input_text, dialect, pretty)
             else:
-                typer.echo(f'Error: Unknown format "{output_format}". Use "sql" or "jsql".', err=True)
-                raise typer.Exit(1)
+                _exit_with_error(f'Unknown format "{output_format}". Use "sql" or "jsql".')
         else:
             # Auto-detect based on input
             try:
@@ -106,13 +113,13 @@ def convert(
 def _convert_jsql_to_sql(input_text: str, dialect: str, pretty: bool) -> str:
     """Convert JSQL (JSON) to SQL."""
     try:
-        jsql = json.loads(input_text)
+        jsql = cast('dict[str, Any]', json.loads(input_text))
     except json.JSONDecodeError as err:
         typer.echo(f'Error: Invalid JSON: {err}', err=True)
         raise typer.Exit(1) from err
 
     try:
-        sql = jsql_to_sql(jsql, dialect=dialect)
+        sql = str(jsql_to_sql(jsql, dialect=dialect))
     except JSQLSyntaxError as err:
         typer.echo(f'Error: Invalid JSQL: {err!s}', err=True)
         if hasattr(err, 'path') and err.path:

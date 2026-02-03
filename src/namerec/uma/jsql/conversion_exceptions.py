@@ -1,5 +1,7 @@
 """Custom exceptions for JSQL conversion operations."""
 
+from typing import Any
+
 from namerec.uma.jsql.exceptions import JSQLSyntaxError
 
 __all__ = [
@@ -39,7 +41,12 @@ class UnknownOperatorError(JSQLConversionError):
 class InvalidExpressionError(JSQLConversionError):
     """Raised when expression structure is invalid."""
 
-    def __init__(self, message: str, path: str = '', expression: dict | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        path: str = '',
+        expression: dict[str, Any] | None = None,
+    ) -> None:
         """
         Initialize InvalidExpressionError.
 

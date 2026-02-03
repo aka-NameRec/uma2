@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
+from typing import cast
 
 from namerec.uma.core.access import check_access
 from namerec.uma.core.context import UMAContext
@@ -70,7 +71,7 @@ class UMA:
 
         entity: EntityName
         context: UMAContext
-        handler: EntityHandler
+        handler: type[EntityHandler]
 
     registry: EntityRegistry
     namespace_configs: Mapping[str, NamespaceConfig]
@@ -238,7 +239,8 @@ class UMA:
         params = await self._prepare_operation(
             entity_name, OP_DELETE, namespace, user_context
         )
-        return await params.handler.delete(params.entity, id_value, params.context)
+        deleted = await params.handler.delete(params.entity, id_value, params.context)
+        return bool(deleted)
 
     async def entity_details(
         self,
@@ -296,6 +298,7 @@ class UMA:
             context.namespace,
             context,
         )
+        entities = list(entities)
 
         # Format with namespace prefix (if not default)
         if context.namespace != self.default_namespace:
@@ -537,7 +540,7 @@ class UMA:
             print(f"Cached queries: {stats['size']}")
         """
         if self.cache_backend:
-            return self.cache_backend.stats()
+            return cast('dict[str, Any]', self.cache_backend.stats())
 
         return {
             'backend': 'none',

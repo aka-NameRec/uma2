@@ -1,5 +1,8 @@
 """Metadata provider implementation."""
 
+from typing import Any
+from typing import cast
+
 from sqlalchemy import Engine
 from sqlalchemy import Table
 
@@ -44,8 +47,8 @@ class DefaultMetadataProvider:
             reflector: Optional custom reflector (default: new DatabaseReflector)
         """
         self._schema = schema
-        self._cache = cache or MetadataCache()
-        self._reflector = reflector or DatabaseReflector(schema=schema)
+        self._cache: MetadataCache = cache or MetadataCache()
+        self._reflector: DatabaseReflector = reflector or DatabaseReflector(schema=schema)
 
     @property
     def schema(self) -> str | None:
@@ -56,7 +59,7 @@ class DefaultMetadataProvider:
         self,
         entity_name: EntityName,
         context: UMAContext,  # noqa: ARG002
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Get custom metadata for an entity.
 
@@ -68,12 +71,12 @@ class DefaultMetadataProvider:
             Metadata dictionary (empty if not found)
         """
         key = str(entity_name)
-        return self._cache.get_custom_metadata(key)
+        return dict(self._cache.get_custom_metadata(key))
 
     def set_metadata(
         self,
         entity_name: str | EntityName,
-        metadata: dict,
+        metadata: dict[str, Any],
     ) -> None:
         """
         Set custom metadata for an entity.
@@ -88,7 +91,7 @@ class DefaultMetadataProvider:
     def update_metadata(
         self,
         entity_name: str | EntityName,
-        metadata: dict,
+        metadata: dict[str, Any],
     ) -> None:
         """
         Update (merge) metadata for an entity.
@@ -171,7 +174,7 @@ class DefaultMetadataProvider:
         if not self._cache.has_namespace(namespace):
             await self._load_metadata(namespace, context.engine, context)
 
-        return self._cache.list_tables(namespace)
+        return list(self._cache.list_tables(namespace))
 
     async def entity_exists(
         self,
@@ -190,9 +193,10 @@ class DefaultMetadataProvider:
         """
         try:
             await self.get_table(entity_name, context.engine, context)
-            return True
         except UMANotFoundError:
             return False
+        else:
+            return True
 
     async def preload(self, engine: Engine, namespace: str = 'default') -> None:
         """
@@ -251,10 +255,12 @@ class DefaultMetadataProvider:
         Returns:
             Resolved namespace identifier
         """
-        if entity_name.namespace:
-            return entity_name.namespace
+        entity_namespace = entity_name.namespace
+        if entity_namespace:
+            return cast('str', entity_namespace)
         if context is not None:
-            return context.namespace
+            context_namespace = context.namespace
+            return cast('str', context_namespace)
         return 'default'
 
     async def can(

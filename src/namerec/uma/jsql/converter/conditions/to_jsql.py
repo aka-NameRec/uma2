@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from typing import Any
+from typing import cast
 
 import sqlglot.expressions as exp
 
@@ -18,14 +19,14 @@ def _convert_expression(expression: exp.Expression) -> dict[str, Any]:
     """Resolve circular dependency lazily."""
     from namerec.uma.jsql.converter.sqlglot_to_jsql import convert_expression_to_jsql  # noqa: PLC0415
 
-    return convert_expression_to_jsql(expression)
+    return cast('dict[str, Any]', convert_expression_to_jsql(expression))
 
 
 def _convert_select(select_expr: exp.Select) -> dict[str, Any]:
     """Resolve circular dependency lazily."""
     from namerec.uma.jsql.converter.sqlglot_to_jsql import convert_sqlglot_select_to_jsql  # noqa: PLC0415
 
-    return convert_sqlglot_select_to_jsql(select_expr)
+    return cast('dict[str, Any]', convert_sqlglot_select_to_jsql(select_expr))
 
 
 def _convert_and(expr: exp.And) -> dict[str, Any]:
@@ -98,10 +99,13 @@ def _convert_not_ilike(inner: exp.ILike) -> dict[str, Any]:
 
 
 def _convert_not_between(inner: exp.Between) -> dict[str, Any]:
-    result = normalize_between_jsql_fields(
+    result = cast(
+        'dict[str, Any]',
+        normalize_between_jsql_fields(
         _convert_expression(inner.this),
         _convert_expression(inner.args.get('low')),
         _convert_expression(inner.args.get('high')),
+        ),
     )
     result['op'] = JSQLOperator.NOT_BETWEEN.value
     return result
@@ -231,10 +235,13 @@ def _convert_in(expr: exp.In) -> dict[str, Any]:
 
 
 def _convert_between(expr: exp.Between) -> dict[str, Any]:
-    result = normalize_between_jsql_fields(
+    result = cast(
+        'dict[str, Any]',
+        normalize_between_jsql_fields(
         _convert_expression(expr.this),
         _convert_expression(expr.args.get('low')),
         _convert_expression(expr.args.get('high')),
+        ),
     )
     result['op'] = JSQLOperator.BETWEEN.value
     return result
