@@ -7,14 +7,17 @@ from typing import Any
 
 from namerec.uma.core.access import check_access
 from namerec.uma.core.context import UMAContext
+from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.operations import OP_CREATE
 from namerec.uma.core.operations import OP_DELETE
 from namerec.uma.core.operations import OP_META
 from namerec.uma.core.operations import OP_READ
 from namerec.uma.core.operations import OP_UPDATE
-from namerec.uma.core.namespace_config import NamespaceConfig
 from namerec.uma.core.types import EntityHandler
 from namerec.uma.core.types import EntityName
+from namerec.uma.core.types import MetadataMap
+from namerec.uma.core.types import QueryParams
+from namerec.uma.core.types import RecordData
 from namerec.uma.core.utils import parse_entity_name
 from namerec.uma.handlers.base import DefaultEntityHandler
 from namerec.uma.jsql.cache import CacheBackend
@@ -155,7 +158,7 @@ class UMA:
         id_value: Any,
         user_context: Any = None,
         namespace: str | None = None,
-    ) -> dict:
+    ) -> RecordData:
         """
         Read a record by id.
 
@@ -180,7 +183,7 @@ class UMA:
     async def save(
         self,
         entity_name: str,
-        data: dict,
+        data: RecordData,
         user_context: Any = None,
         namespace: str | None = None,
     ) -> Any:
@@ -242,7 +245,7 @@ class UMA:
         entity_name: str,
         user_context: Any = None,
         namespace: str | None = None,
-    ) -> dict:
+    ) -> MetadataMap:
         """
         Get entity metadata.
 
@@ -302,11 +305,11 @@ class UMA:
 
     async def select(
         self,
-        jsql: dict,
-        params: dict | None = None,
+        jsql: QueryParams,
+        params: QueryParams | None = None,
         user_context: Any = None,
         namespace: str | None = None,
-    ) -> dict:
+    ) -> QueryParams:
         """
         Execute JSQL query.
 

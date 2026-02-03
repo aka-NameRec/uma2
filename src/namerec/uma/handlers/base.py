@@ -49,7 +49,7 @@ class DefaultEntityHandler:
         entity_name: EntityName,
         id_value: Any,
         context: UMAContext,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Read through select + filter by id.
         Does not return None - raises UMANotFoundError.
@@ -92,7 +92,7 @@ class DefaultEntityHandler:
     async def save(
         cls,
         entity_name: EntityName,
-        data: dict,
+        data: dict[str, Any],
         context: UMAContext,
     ) -> Any:
         """
@@ -182,7 +182,7 @@ class DefaultEntityHandler:
         cls,
         entity_name: EntityName,
         context: UMAContext,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Metadata from SQLAlchemy MetaData + enrichment from MetadataProvider.
 
@@ -242,7 +242,7 @@ class DefaultEntityHandler:
         entity_name: EntityName,
         id_value: Any,
         context: UMAContext,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Check record existence and access through read().
         Extracted to separate method to avoid duplication in save/delete.
@@ -261,7 +261,7 @@ class DefaultEntityHandler:
         return await cls.read(entity_name, id_value, context)
 
     @staticmethod
-    def _build_pk_condition(pk_columns: list, id_value: Any) -> Any:
+    def _build_pk_condition(pk_columns: list[Any], id_value: Any) -> Any:
         """
         Build WHERE condition for primary key.
         Supports simple and composite keys.
@@ -280,7 +280,7 @@ class DefaultEntityHandler:
 
     @staticmethod
     def _normalize_pk_id_value(
-        pk_columns: list,
+        pk_columns: list[Any],
         id_value: Any,
         entity_name: EntityName,
     ) -> Any:
@@ -326,7 +326,7 @@ class DefaultEntityHandler:
     @classmethod
     def _build_pk_condition_from_id(
         cls,
-        pk_columns: list,
+        pk_columns: list[Any],
         id_value: Any,
         entity_name: EntityName,
     ) -> Any:

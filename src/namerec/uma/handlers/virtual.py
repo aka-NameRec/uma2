@@ -46,7 +46,7 @@ class VirtualViewHandler:
         entity_name: EntityName,
         id_value: Any,  # noqa: ARG003
         context: UMAContext,  # noqa: ARG003
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Not supported by default for virtual views.
         Can be overridden in subclass if needed.
@@ -69,7 +69,7 @@ class VirtualViewHandler:
     async def save(
         cls,
         entity_name: EntityName,
-        data: dict,  # noqa: ARG003
+        data: dict[str, Any],  # noqa: ARG003
         context: UMAContext,  # noqa: ARG003
     ) -> Any:
         """
@@ -118,7 +118,7 @@ class VirtualViewHandler:
         cls,
         entity_name: EntityName,
         context: UMAContext,  # noqa: ARG003
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Base metadata implementation.
         Automatically adds is_virtual_view=True.
