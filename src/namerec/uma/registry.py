@@ -79,7 +79,7 @@ class EntityRegistry:
 
         # 2. Check if entity exists via MetadataProvider
         if await context.metadata_provider.entity_exists(entity_name, context):
-            return self._default_handler  # type: ignore[return-value]
+            return self._default_handler
 
         # 3. Not found
         raise UMANotFoundError(str(entity_name), f'Entity {entity_name} not found')

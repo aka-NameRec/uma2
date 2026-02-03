@@ -1,5 +1,7 @@
 """Metadata cache for database schema and tables."""
 
+from typing import Any
+
 from sqlalchemy import MetaData
 from sqlalchemy import Table
 
@@ -21,7 +23,7 @@ class MetadataCache:
         """Initialize empty cache."""
         self._metadata: dict[str, MetaData] = {}
         self._tables: dict[str, dict[str, Table]] = {}
-        self._custom_metadata: dict[str, dict] = {}
+        self._custom_metadata: dict[str, dict[str, Any]] = {}
 
     def get_metadata(self, namespace: str) -> MetaData | None:
         """
@@ -85,7 +87,7 @@ class MetadataCache:
         """
         return namespace in self._metadata
 
-    def get_custom_metadata(self, entity_key: str) -> dict:
+    def get_custom_metadata(self, entity_key: str) -> dict[str, Any]:
         """
         Get custom metadata for entity.
 
@@ -97,7 +99,7 @@ class MetadataCache:
         """
         return self._custom_metadata.get(entity_key, {})
 
-    def set_custom_metadata(self, entity_key: str, metadata: dict) -> None:
+    def set_custom_metadata(self, entity_key: str, metadata: dict[str, Any]) -> None:
         """
         Set custom metadata for entity.
 
@@ -107,7 +109,7 @@ class MetadataCache:
         """
         self._custom_metadata[entity_key] = metadata
 
-    def update_custom_metadata(self, entity_key: str, metadata: dict) -> None:
+    def update_custom_metadata(self, entity_key: str, metadata: dict[str, Any]) -> None:
         """
         Update (merge) custom metadata for entity.
 

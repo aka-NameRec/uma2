@@ -11,6 +11,7 @@ from sqlalchemy import update
 
 from namerec.uma.core.context import UMAContext
 from namerec.uma.core.exceptions import UMANotFoundError
+from namerec.uma.core.exceptions import UMAValidationError
 from namerec.uma.core.types import EntityName
 from namerec.uma.core.utils import get_table
 
@@ -48,7 +49,7 @@ class DefaultEntityHandler:
         entity_name: EntityName,
         id_value: Any,
         context: UMAContext,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Read through select + filter by id.
         Does not return None - raises UMANotFoundError.
@@ -70,12 +71,9 @@ class DefaultEntityHandler:
         # Add condition by id
         table = await get_table(context, entity_name)
         pk_columns = list(table.primary_key.columns)
-
-        if len(pk_columns) == 1:
-            query = query.where(pk_columns[0] == id_value)
-        else:
-            conditions = [col == val for col, val in zip(pk_columns, id_value, strict=False)]
-            query = query.where(and_(*conditions))
+        query = query.where(
+            cls._build_pk_condition_from_id(pk_columns, id_value, entity_name)
+        )
 
         # Execute
         async with context.engine.connect() as conn:
@@ -94,7 +92,7 @@ class DefaultEntityHandler:
     async def save(
         cls,
         entity_name: EntityName,
-        data: dict,
+        data: dict[str, Any],
         context: UMAContext,
     ) -> Any:
         """
@@ -135,7 +133,9 @@ class DefaultEntityHandler:
             await cls._ensure_exists(entity_name, id_value, context)
 
             # Build condition by PK
-            pk_condition = cls._build_pk_condition(pk_columns, id_value)
+            pk_condition = cls._build_pk_condition_from_id(
+                pk_columns, id_value, entity_name
+            )
 
             stmt = update(table).where(pk_condition).values(**data)
             await conn.execute(stmt)
@@ -168,19 +168,22 @@ class DefaultEntityHandler:
 
         table = await get_table(context, entity_name)
         pk_columns = list(table.primary_key.columns)
-        pk_condition = cls._build_pk_condition(pk_columns, id_value)
+        pk_condition = cls._build_pk_condition_from_id(
+            pk_columns, id_value, entity_name
+        )
 
         async with context.engine.begin() as conn:
             stmt = sql_delete(table).where(pk_condition)
             result = await conn.execute(stmt)
-            return result.rowcount > 0
+            rowcount = int(result.rowcount or 0)
+            return rowcount > 0
 
     @classmethod
     async def meta(
         cls,
         entity_name: EntityName,
         context: UMAContext,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Metadata from SQLAlchemy MetaData + enrichment from MetadataProvider.
 
@@ -221,11 +224,14 @@ class DefaultEntityHandler:
 
         # Enrich from MetadataProvider
         if context.metadata_provider:
-            try:
-                provider_metadata = await context.metadata_provider.get_metadata(entity_name, context)
-                metadata.update(provider_metadata)
-            except Exception:  # noqa: S110
-                pass
+            provider_metadata = await context.metadata_provider.get_metadata(entity_name, context)
+            if not isinstance(provider_metadata, dict):
+                raise UMAValidationError(
+                    message='Metadata provider must return a dictionary',
+                    field_name='metadata',
+                    entity_name=str(entity_name),
+                )
+            metadata.update(provider_metadata)
 
         return metadata
 
@@ -237,7 +243,7 @@ class DefaultEntityHandler:
         entity_name: EntityName,
         id_value: Any,
         context: UMAContext,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Check record existence and access through read().
         Extracted to separate method to avoid duplication in save/delete.
@@ -256,7 +262,7 @@ class DefaultEntityHandler:
         return await cls.read(entity_name, id_value, context)
 
     @staticmethod
-    def _build_pk_condition(pk_columns: list, id_value: Any) -> Any:
+    def _build_pk_condition(pk_columns: list[Any], id_value: Any) -> Any:
         """
         Build WHERE condition for primary key.
         Supports simple and composite keys.
@@ -271,4 +277,70 @@ class DefaultEntityHandler:
         if len(pk_columns) == 1:
             return pk_columns[0] == id_value
 
-        return and_(*[col == val for col, val in zip(pk_columns, id_value, strict=False)])
+        return and_(*[col == val for col, val in zip(pk_columns, id_value, strict=True)])
+
+    @staticmethod
+    def _normalize_pk_id_value(
+        pk_columns: list[Any],
+        id_value: Any,
+        entity_name: EntityName,
+    ) -> Any:
+        """
+        Normalize and validate id value against table primary key shape.
+
+        Args:
+            pk_columns: Primary key columns
+            id_value: Input id value
+            entity_name: Entity name for error context
+
+        Returns:
+            Scalar id for single-column PK, tuple for composite PK
+
+        Raises:
+            UMAValidationError: If id format does not match PK structure
+        """
+        if len(pk_columns) == 1:
+            return id_value
+
+        if not isinstance(id_value, (tuple, list)):
+            raise UMAValidationError(
+                message=(
+                    f'Composite primary key for "{entity_name}" requires tuple/list '
+                    f'with {len(pk_columns)} values'
+                ),
+                field_name='id_value',
+                entity_name=str(entity_name),
+            )
+
+        if len(id_value) != len(pk_columns):
+            raise UMAValidationError(
+                message=(
+                    f'Composite primary key for "{entity_name}" requires exactly '
+                    f'{len(pk_columns)} values, got {len(id_value)}'
+                ),
+                field_name='id_value',
+                entity_name=str(entity_name),
+            )
+
+        return tuple(id_value)
+
+    @classmethod
+    def _build_pk_condition_from_id(
+        cls,
+        pk_columns: list[Any],
+        id_value: Any,
+        entity_name: EntityName,
+    ) -> Any:
+        """
+        Validate id value and build WHERE condition for primary key.
+
+        Args:
+            pk_columns: List of PK columns
+            id_value: Input id value
+            entity_name: Entity name for validation context
+
+        Returns:
+            SQLAlchemy condition for primary key lookup
+        """
+        normalized_id = cls._normalize_pk_id_value(pk_columns, id_value, entity_name)
+        return cls._build_pk_condition(pk_columns, normalized_id)

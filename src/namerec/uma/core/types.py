@@ -10,6 +10,10 @@ from sqlalchemy import MetaData
 from sqlalchemy import Select
 from sqlalchemy import Table
 
+RecordData = dict[str, Any]
+MetadataMap = dict[str, Any]
+QueryParams = dict[str, Any]
+
 
 @dataclass(frozen=True)
 class EntityName:
@@ -71,7 +75,7 @@ class EntityHandler(Protocol):
     async def select(
         cls,
         entity_name: EntityName,
-        params: dict[str, Any],
+        params: QueryParams,
         context: UMAContextSpec,
     ) -> Select:
         """
@@ -93,7 +97,7 @@ class EntityHandler(Protocol):
         entity_name: EntityName,
         id_value: Any,
         context: UMAContextSpec,
-    ) -> dict:
+    ) -> RecordData:
         """
         Read a single record by id.
         Uses select for access checking.
@@ -115,7 +119,7 @@ class EntityHandler(Protocol):
     async def save(
         cls,
         entity_name: EntityName,
-        data: dict,
+        data: RecordData,
         context: UMAContextSpec,
     ) -> Any:
         """
@@ -159,7 +163,7 @@ class EntityHandler(Protocol):
         cls,
         entity_name: EntityName,
         context: UMAContextSpec,
-    ) -> dict:
+    ) -> MetadataMap:
         """
         Return entity metadata.
 
@@ -189,7 +193,7 @@ class MetadataProvider(Protocol):
         self,
         entity_name: EntityName,
         context: UMAContextSpec,
-    ) -> dict:
+    ) -> MetadataMap:
         """
         Get metadata for an entity.
 

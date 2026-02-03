@@ -52,7 +52,7 @@ async def copy_field_meta(
     context: UMAContext,
     registry: Any,  # EntityRegistry - avoiding circular import
     overrides: dict[str, Any] | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """
     Copy field metadata from source entity with optional overrides.
 
@@ -80,9 +80,16 @@ async def copy_field_meta(
     source_meta = await handler.meta(source_entity, context)
 
     # Find field
-    for col in source_meta.get('columns', []):
-        if col['name'] == field_name:
-            result = col.copy()
+    columns = source_meta.get('columns', [])
+    if not isinstance(columns, list):
+        msg = f'Invalid metadata format for {source_entity}: "columns" must be a list'
+        raise TypeError(msg)
+
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        if col.get('name') == field_name:
+            result: dict[str, Any] = col.copy()
             if overrides:
                 result.update(overrides)
             return result
@@ -91,7 +98,7 @@ async def copy_field_meta(
     raise ValueError(msg)
 
 
-def is_virtual_view(metadata: dict) -> bool:
+def is_virtual_view(metadata: dict[str, Any]) -> bool:
     """
     Check if entity is a virtual view.
 

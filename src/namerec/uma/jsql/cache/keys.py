@@ -75,7 +75,7 @@ def make_cache_key(
     return hashlib.blake2b(cache_input.encode(), digest_size=16).hexdigest()
 
 
-def _extract_cache_key_context(user_context: Any) -> dict:
+def _extract_cache_key_context(user_context: Any) -> dict[str, Any]:
     """
     Extract cache-relevant fields from user context.
 
